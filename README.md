@@ -1,4 +1,4 @@
-# ConsMin Magnetic Load & Haul Shiftboard
+# Load & Haul Shiftboard
 
 Production handover package — version 1.0.4, 22 July 2026.
 
