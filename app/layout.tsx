@@ -13,8 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Magnetic Load and Haul Shiftboard",
+  title: "Load and Haul Shiftboard",
   description: "Drag-and-drop magnetic shiftboard for Load and Haul operations.",
+  other: {
+    "codex-preview": "development",
+  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

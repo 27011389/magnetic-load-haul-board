@@ -14,7 +14,6 @@ const localBindingConfig = {
       database_id: LOCAL_DATABASE_ID,
     },
   ],
-  r2_buckets: [],
 };
 
 export default defineConfig(async () => {
@@ -27,6 +26,8 @@ export default defineConfig(async () => {
   return {
     server: {
       host: "0.0.0.0",
+      port: 5173,
+      strictPort: true,
     },
     plugins: [
       vinext(),

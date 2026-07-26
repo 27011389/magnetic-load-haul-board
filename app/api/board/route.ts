@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import {
   defaultMagneticBoard,
   type MagneticBoardState,
@@ -77,6 +78,22 @@ async function getOrCreateBoard() {
   return row;
 }
 
+function getDisplayName(requestHeaders: Headers) {
+  const fullName = requestHeaders.get("oai-authenticated-user-full-name");
+  const encoding = requestHeaders.get("oai-authenticated-user-full-name-encoding");
+  const email = requestHeaders.get("oai-authenticated-user-email");
+  if (fullName) {
+    try {
+      return encoding === "percent-encoded-utf-8"
+        ? decodeURIComponent(fullName).toUpperCase()
+        : fullName.toUpperCase();
+    } catch {
+      return fullName.toUpperCase();
+    }
+  }
+  return email?.split("@")[0]?.replace(/[._-]+/g, " ").toUpperCase() || "MINE CONTROL";
+}
+
 export async function GET() {
   try {
     const row = await getOrCreateBoard();
@@ -99,11 +116,12 @@ export async function PUT(request: Request) {
       return Response.json({ error: "A valid magnetic board is required." }, { status: 400 });
     }
 
+    const requestHeaders = await headers();
     const now = new Date().toISOString();
     const board: MagneticBoardState = {
       ...payload.board,
       updatedAt: now,
-      updatedBy: "MINE CONTROL",
+      updatedBy: getDisplayName(requestHeaders),
     };
 
     await getOrCreateBoard();

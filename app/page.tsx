@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -19,9 +18,7 @@ import {
   PARK_UP_TOP,
   WORK_ROWS_TOP,
   compactBoardY,
-  compactCurrentMagnetWidths,
   compactMagnetHeight,
-  responsiveMagnetWidth,
   defaultMagneticBoard,
   kindDefaults,
   magnetInventory,
@@ -161,11 +158,11 @@ function expandFloorRows(magnets: Magnet[]) {
 }
 
 function compactBoardLayout(magnets: Magnet[]) {
-  return compactCurrentMagnetWidths(magnets.map((magnet) => ({
+  return magnets.map((magnet) => ({
     ...magnet,
     y: compactBoardY(magnet.y, magnet.x),
     height: compactMagnetHeight(magnet.kind, magnet.height),
-  })));
+  }));
 }
 
 function inferNearbyAttachments(magnets: Magnet[]) {
@@ -453,24 +450,6 @@ export default function Home() {
               ...payload.board,
               layoutVersion: defaultMagneticBoard.layoutVersion,
               magnets: linked.magnets,
-            }, { recordHistory: false });
-            return;
-          }
-          if (
-            payload.board.layoutVersion === 6
-            || payload.board.layoutVersion === 7
-            || payload.board.layoutVersion === 8
-          ) {
-            const magnets = compactCurrentMagnetWidths(payload.board.magnets);
-            const startingMagnets = payload.board.startingMagnets
-              ? compactCurrentMagnetWidths(payload.board.startingMagnets)
-              : undefined;
-            const linked = inferNearbyAttachments(magnets);
-            void commitBoard({
-              ...payload.board,
-              layoutVersion: defaultMagneticBoard.layoutVersion,
-              magnets: linked.magnets,
-              startingMagnets,
             }, { recordHistory: false });
             return;
           }
@@ -1113,14 +1092,7 @@ function BoardBackground({
   return (
     <div className="board-background" aria-hidden="true">
       <header className="main-board-header">
-        <Image
-          src="/ConsminLogo.png"
-          alt="ConsMin"
-          width={540}
-          height={72}
-          priority
-          unoptimized
-        />
+        <img src="/ConsminLogo.png" alt="" />
         <div className="main-title">
           <span>WOODIE WOODIE OPERATIONS</span>
           <h1>LOAD AND HAUL SHIFTBOARD</h1>
@@ -1320,11 +1292,6 @@ function MagnetEditor({
               ...draft,
               primary: draft.primary.trim().toUpperCase(),
               secondary: draft.secondary?.trim().toUpperCase() || undefined,
-              width: responsiveMagnetWidth(
-                draft.kind,
-                draft.primary,
-                draft.secondary?.trim(),
-              ) ?? draft.width,
             });
           }}
         >

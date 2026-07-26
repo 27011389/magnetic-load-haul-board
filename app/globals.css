@@ -243,7 +243,7 @@ button {
   border-radius: 4px;
   background: #fff;
   color: #48554f;
-  padding: 0 6px;
+  padding: 0 8px;
   font-size: 7px;
   font-weight: 950;
   letter-spacing: .07em;
@@ -329,10 +329,7 @@ button.status-chip { cursor: pointer; }
   width: 540px;
   height: 72px;
   display: block;
-  object-fit: cover;
-  object-position: center;
-  transform: translateY(1px) scaleY(1.4);
-  transform-origin: center;
+  object-fit: fill;
 }
 
 .main-title {
@@ -1340,7 +1337,7 @@ button.status-chip { cursor: pointer; }
   justify-content: center;
   border-width: 1px;
   border-style: solid;
-  padding: 0 8px;
+  padding: 0 4px;
   font-size: 8px;
   font-weight: 950;
   letter-spacing: .025em;
@@ -1358,16 +1355,12 @@ button.status-chip { cursor: pointer; }
 
 .magnet-person {
   align-items: center;
-  padding: 0 8px;
+  padding: 0 4px;
   background: #fffefa;
   text-align: center;
 }
 
-.magnet-person strong {
-  overflow: visible;
-  font-size: 8px;
-  text-overflow: clip;
-}
+.magnet-person strong { font-size: 8px; }
 
 .magnet-location {
   gap: 2px;
@@ -1445,5 +1438,5 @@ button.status-chip { cursor: pointer; }
   cursor: grab;
 }
 
-.rack-magnet.magnet-person { min-width: 0; padding-inline: 8px; }
+.rack-magnet.magnet-person { min-width: 84px; }
 .rack-magnet.magnet-location { min-width: 140px; justify-content: flex-start; }
