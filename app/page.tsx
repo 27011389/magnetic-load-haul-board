@@ -1092,7 +1092,7 @@ function BoardBackground({
   return (
     <div className="board-background" aria-hidden="true">
       <header className="main-board-header">
-        <img src="/ConsminLogo.png" alt="" />
+        <img src="/ConsminLogo.png?v=20260722" alt="" />
         <div className="main-title">
           <span>WOODIE WOODIE OPERATIONS</span>
           <h1>LOAD AND HAUL SHIFTBOARD</h1>
