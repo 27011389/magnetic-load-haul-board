@@ -90,38 +90,9 @@ export const kindDefaults: Record<MagnetKind, { width: number; height: number; t
   lightvehicle: { width: 68, height: 22, tone: "slate" },
   support: { width: 68, height: 22, tone: "teal" },
   location: { width: 150, height: 26, tone: "red" },
-  person: { width: 52, height: 22, tone: "white" },
+  person: { width: 92, height: 22, tone: "white" },
   note: { width: 360, height: 20, tone: "white" },
 };
-
-const responsiveWidthKinds = new Set<MagnetKind>([
-  "truck", "dozer", "grader", "watercart", "excavator",
-  "loader", "lightvehicle", "support", "person",
-]);
-
-const magnetCharacterWidth = (character: string) => {
-  if (character === " ") return 3.6;
-  if ("MW".includes(character)) return 7.2;
-  if ("IJL1".includes(character)) return 3.8;
-  return 5.4;
-};
-
-export function responsiveMagnetWidth(kind: MagnetKind, primary: string, secondary?: string) {
-  if (secondary || !responsiveWidthKinds.has(kind)) return undefined;
-  const textWidth = [...primary.trim().toUpperCase()]
-    .reduce((total, character) => total + magnetCharacterWidth(character), 0);
-
-  return Math.ceil(kind === "person"
-    ? Math.max(46, textWidth + 20)
-    : Math.max(58, textWidth + 16));
-}
-
-export function compactCurrentMagnetWidths(magnets: Magnet[]) {
-  return magnets.map((magnet) => {
-    const width = responsiveMagnetWidth(magnet.kind, magnet.primary, magnet.secondary);
-    return width ? { ...magnet, width } : magnet;
-  });
-}
 
 export function compactMagnetHeight(kind: MagnetKind, height: number) {
   const legacyCeiling = kind === "person" ? 29 : kind === "location" || kind === "note" ? 28 : 24;
@@ -132,24 +103,18 @@ const item = (
   id: string, kind: MagnetKind, primary: string, x: number, y: number,
   width = kindDefaults[kind].width, height = kindDefaults[kind].height,
   tone = kindDefaults[kind].tone, secondary?: string,
-): Magnet => {
-  const responsiveWidth = width === kindDefaults[kind].width
-    ? responsiveMagnetWidth(kind, primary, secondary)
-    : undefined;
-
-  return {
-    id,
-    kind,
-    primary,
-    secondary,
-    x,
-    y: compactBoardY(y, x),
-    width: responsiveWidth ?? width,
-    height: compactMagnetHeight(kind, height),
-    tone,
-    z: 1,
-  };
-};
+): Magnet => ({
+  id,
+  kind,
+  primary,
+  secondary,
+  x,
+  y: compactBoardY(y, x),
+  width,
+  height: compactMagnetHeight(kind, height),
+  tone,
+  z: 1,
+});
 
 const equipment = (
   prefix: string, kind: MagnetKind, labels: string[], x: number, y: number,
@@ -181,7 +146,7 @@ const floorTruckPairs = (
 });
 
 export const defaultMagneticBoard: MagneticBoardState = {
-  layoutVersion: 9,
+  layoutVersion: 6,
   boardDate: "20 JUL 2026",
   roster: "CREW B · NIGHT 4 OF 7",
   updatedAt: "2026-07-20T09:30:00+08:00",
@@ -269,12 +234,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
 };
 
 const templates = (kind: MagnetKind, labels: string[]): MagnetTemplate[] =>
-  labels.map((primary) => ({
-    kind,
-    primary,
-    ...kindDefaults[kind],
-    width: responsiveMagnetWidth(kind, primary) ?? kindDefaults[kind].width,
-  }));
+  labels.map((primary) => ({ kind, primary, ...kindDefaults[kind] }));
 
 export const magnetInventory: MagnetTemplate[] = [
   ...templates("truck", ["DT62", "DT63", "DT64", "DT65", "DT66", "DT67", "DT68", "DT69", "DT70", "DT71", "DT72", "DT73", "DT74", "DT75", "DT76", "DT77", "DT214", "DT215", "DT216", "DT217", "DT218", "DT219", "DT221", "DT222", "DT223", "DT224", "DT225", "DT226"]),
