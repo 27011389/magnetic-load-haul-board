@@ -12,8 +12,13 @@ generated distribution ZIP files.
 The application has no built-in authentication or per-role authorisation.
 Production access must be protected by company-managed SSO or an equivalent
 approved access layer. Restrict the D1 database and deployment project to the
-minimum required ICT administrators.
+minimum required authorised administrators.
 
 Report suspected vulnerabilities or data exposure through the organisation's
 internal ICT/security process. Do not open a public GitHub issue containing
 credentials, personal information, mine plans, or live operational data.
+
+ICT's current role is security and vulnerability assessment only. ICT is not
+the application owner and is not responsible for ongoing maintenance,
+deployment, monitoring, backup or user support unless separately agreed in
+writing.

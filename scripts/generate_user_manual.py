@@ -261,6 +261,7 @@ for item in contents:
 
 doc.add_heading("1. Purpose and operating principles", level=1)
 doc.add_paragraph("The shiftboard provides one shared visual view of Day and Night load-and-haul activity. It replaces loose physical magnets with draggable digital magnets that save to the shared board database.")
+doc.add_paragraph("ICT involvement is limited to reviewing the application and assessing vulnerabilities to determine whether it is safe to run. ICT does not own or maintain the application and is not responsible for deployment, monitoring, backup or user support unless separately agreed in writing.")
 for text in [
     "Treat the board as a coordination display, not the authoritative maintenance, dispatch or training record.",
     "Confirm equipment availability, operator competency and work instructions before assignment.",
@@ -271,7 +272,7 @@ for text in [
     doc.add_paragraph(text, style="List Bullet")
 
 doc.add_heading("2. Mine 2, Mine 3 and Control operating model", level=1)
-doc.add_paragraph("The software presents the same shared board to every screen and does not enforce user roles. The responsibilities below are the recommended operating model: Control is the single editing authority, while Mine 2 and Mine 3 verify and consume the board for their areas. ICT access controls should support this model where practical.")
+doc.add_paragraph("The software presents the same shared board to every screen and does not enforce user roles. The responsibilities below are the recommended operating model: Control is the single editing authority, while Mine 2 and Mine 3 verify and consume the board for their areas. Access controls should support this model where practical.")
 roles = [
     ("Control", "Own the live board", "Update shift details; allocate crews and fleet; resolve conflicts; confirm saves; lock the board; publish TV View."),
     ("Mine 2", "Verify Mine 2 activity", "Check the relevant pit, equipment, operator and park-up information; report discrepancies to Control; avoid concurrent edits unless Control hands over authority."),

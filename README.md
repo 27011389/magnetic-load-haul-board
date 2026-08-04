@@ -6,9 +6,9 @@ This application is a live browser version of the ConsMin Load and Haul
 shiftboard. It replaces physical magnets with draggable digital magnets while
 keeping the familiar day shift, night shift, pit allocation, park-up and workshop layout.
 
-This README is the primary technical handover document for ICT. It covers the
-application's purpose, architecture, setup, data storage, deployment,
-maintenance, backup, security and troubleshooting.
+This README provides the technical evidence ICT needs to review the application
+and assess security vulnerabilities before it is approved to run. ICT is not
+being asked to maintain, operate, deploy or support the application.
 
 ## 1. Handover status
 
@@ -25,7 +25,7 @@ At handover:
 - the illustrated operational manual is included in `docs/`;
 - unused starter files, example code and unreferenced helpers have been removed;
 - the source has no OpenAI Sites configuration or runtime dependency;
-- the source is ready to place in an ICT-managed Git repository.
+- the source is ready for ICT security and vulnerability review.
 
 The codebase is intentionally small. The application is primarily one React
 page, one stylesheet, one starting-data file and one API route.
@@ -122,7 +122,7 @@ vite.config.ts         Local Worker/D1 and Vite configuration
 
 ## 6. First-time setup
 
-### Recommended ICT environment
+### Review and development environment
 
 - Node.js 22.13 or newer
 - npm supplied with Node.js
@@ -175,7 +175,7 @@ npm run validate:artifact
 test. A successful production build is written to `dist/`; this folder is
 generated and should not be committed or included in source archives.
 
-For a clean ICT verification:
+For a clean technical verification:
 
 1. Extract or clone the source into a new folder.
 2. Run `npm ci`.
@@ -190,10 +190,12 @@ binding named **`DB`**. Local development defines this binding directly in
 `vite.config.ts`; no `.openai` directory is required.
 
 The source archive contains no deployment credentials and is not tied to an ICT
-employee's personal account. ICT should:
+employee's personal account. If the application is approved to run, the
+application owner—not ICT—is responsible for arranging the following unless a
+separate service agreement explicitly assigns an item elsewhere:
 
-1. place the source in a company-owned Git repository;
-2. create or adopt a company-owned Cloudflare Worker project;
+1. maintain the source in an appropriately controlled private Git repository;
+2. create or adopt an approved Cloudflare Worker project;
 3. create or attach a D1 database;
 4. expose that database to the application as the binding `DB`;
 5. apply `drizzle/0000_unknown_hedge_knight.sql` to the production D1 database;
@@ -225,14 +227,17 @@ limit access to approved ICT and operational personnel unless the seed data is
 replaced with non-personal examples. The Mine 2, Mine 3 and Control roles in the
 user manual are operational responsibilities; they are not enforced by the app.
 
-Before production use, ICT should:
+As part of the current review, ICT is asked only to assess whether the proposed
+architecture, controls and operating environment are safe to run. The
+application owner is responsible for ensuring that any approval conditions are
+implemented, including:
 
 - put the URL behind company SSO or another approved access layer;
 - restrict access to the required operations group;
 - restrict direct access to the D1 database;
 - keep deployment credentials out of the repository;
 - review application and platform logs for failed API requests;
-- document the business owner and technical support owner.
+- document the application owner and the support arrangement outside ICT.
 
 Do not expose `npm run dev -- --host 0.0.0.0` to an untrusted or public network.
 
@@ -256,7 +261,7 @@ its `payload`, `version` and `updated_at` values.
 Recommended policy:
 
 - automatic daily backup;
-- retain at least 30 days, subject to ICT policy;
+- retain at least 30 days, subject to applicable company policy;
 - take a manual export before a release or layout-version change;
 - periodically test restoration into a non-production database.
 
@@ -348,7 +353,7 @@ For a first diagnosis, check in this order:
 
 ## 13. Release procedure
 
-1. Create a branch in the ICT-managed repository.
+1. Create a branch in the controlled private repository.
 2. Make the smallest required source change.
 3. Update this README when setup, architecture or operations change.
 4. Run `npm ci`, `npm run lint` and `npm test` from a clean checkout.
@@ -372,29 +377,31 @@ These limitations keep the codebase simple. If requirements grow, priority
 enhancements should be server-side access control, an append-only audit log,
 automatic backup verification and conflict-aware saves.
 
-## 15. ICT acceptance checklist
+## 15. ICT security-review checklist
 
-- [ ] Source imported into a company-owned Git repository.
-- [ ] Business owner and ICT support owner recorded.
-- [ ] Company-owned hosting project and D1 database confirmed.
-- [ ] `DB` binding configured.
-- [ ] SSO or approved access control enabled.
-- [ ] Clean `npm ci`, lint, tests and production build pass.
-- [ ] Non-production functional and TV tests complete.
-- [ ] Backup and restore process documented and tested.
-- [ ] Monitoring/log ownership agreed.
-- [ ] Production URL, support contact and release process documented internally.
+- [ ] Source and dependency configuration reviewed for known vulnerabilities.
+- [ ] Data exposure, personal-information handling and repository visibility reviewed.
+- [ ] Network exposure and proposed access controls assessed.
+- [ ] API, D1 binding and hosting configuration assessed.
+- [ ] Clean `npm ci`, lint, tests and production build results reviewed.
+- [ ] Material findings and required mitigations documented for the application owner.
+- [ ] ICT decision recorded as approved, approved with conditions, or not approved.
+
+Completion of this review does not transfer application ownership, maintenance,
+deployment, monitoring, backup or user-support responsibility to ICT.
 
 ## 16. Support boundary and ownership
 
 All application source, configuration, migration files and build instructions
 required for maintenance are contained in this project. No part of the source
-depends on the original developer's personal computer or personal account.
+depends on an ICT employee's personal computer or personal account.
 
-ConsMin ICT should become the technical owner after acceptance. The operations
-team should own board content and usage decisions. Any future external support
-provider should work through the ICT-managed repository, non-production
-environment and standard change process.
+ICT's present involvement is limited to reviewing the application, assessing
+vulnerabilities and advising whether it is safe to run. Approval does not make
+ICT the technical owner or create an ongoing maintenance or support obligation.
+The application owner remains responsible for maintenance, deployment, backup,
+monitoring, support and operational decisions, using an external provider or
+other agreed resource where necessary.
 
 This is proprietary project material. No open-source licence is granted by this
 repository.
