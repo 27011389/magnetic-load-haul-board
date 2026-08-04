@@ -10,7 +10,7 @@ const localBindingConfig = {
   d1_databases: [
     {
       binding: "DB",
-      database_name: "magnetic-load-haul-board-local",
+      database_name: "magnetic-load-haul-board",
       database_id: LOCAL_DATABASE_ID,
     },
   ],

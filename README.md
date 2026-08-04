@@ -1,10 +1,10 @@
 # Load & Haul Shiftboard
 
-Production handover package — version 1.0.4, 22 July 2026.
+Production handover package — version 1.0.4, 4 August 2026.
 
 This application is a live browser version of the ConsMin Load and Haul
 shiftboard. It replaces physical magnets with draggable digital magnets while
-keeping the familiar day shift, night shift, R + R, park-up and workshop layout.
+keeping the familiar day shift, night shift, pit allocation, park-up and workshop layout.
 
 This README is the primary technical handover document for ICT. It covers the
 application's purpose, architecture, setup, data storage, deployment,
@@ -12,7 +12,7 @@ maintenance, backup, security and troubleshooting.
 
 ## 1. Handover status
 
-The supplied source is a clean, reproducible project. It does not include build
+The Git-tracked source is a clean, reproducible project. It does not include build
 outputs, package caches, installed dependencies, temporary files, credentials,
 or a copy of the live operational database.
 
@@ -22,6 +22,7 @@ At handover:
 - dependencies are pinned by `package-lock.json`;
 - the database migration is included;
 - the ConsMin logo and favicon are included;
+- the illustrated operational manual is included in `docs/`;
 - unused starter files, example code and unreferenced helpers have been removed;
 - the source has no OpenAI Sites configuration or runtime dependency;
 - the source is ready to place in an ICT-managed Git repository.
@@ -38,12 +39,13 @@ page, one stylesheet, one starting-data file and one API route.
   responsive padding, without clipping longer names.
 - Collision protection prevents magnets from overlapping.
 - Searchable magnet rack plus custom magnet creation and editing.
-- Board lock, 10 px snapping, keyboard positioning and reset controls.
+- Board lock, 10 px snapping, keyboard positioning, four/five-section layouts and reset controls.
 - Undo history for the last 20 board changes.
 - Search and unassigned-operator warnings.
 - Day/night truck allocation totals and park-up totals.
 - Fixed go-line, shut-pad, workshop and standby allocation bays.
 - Shift/date/note editing and day/night allocation copying.
+- A/B/C crew allocation with searchable full names and editable competency notes.
 - Full-screen and fitted TV modes.
 - Shared D1 storage with automatic four-second refresh.
 - Last-moved indication and saved starting-layout support.
@@ -113,6 +115,7 @@ public/
 scripts/               Reproducible install, build and artifact checks
 tests/                 Production-render smoke test
 worker/index.ts        Cloudflare Worker entry point
+docs/                  Illustrated Mine 2, Mine 3 and Control user manual
 package.json           Commands and dependency versions
 vite.config.ts         Local Worker/D1 and Vite configuration
 ```
@@ -207,7 +210,7 @@ Drizzle migration.
 - Set browser zoom to 100%.
 - Disable television overscan or enable “Just Scan”, “Screen Fit” or an
   equivalent setting.
-- Open **TV View** in the application. It scales the complete 1880 × 918 board
+- Open **TV View** in the application. It scales the complete 1880 × 940 board
   to the available browser viewport without scrolling.
 - Use **Full Screen** if browser chrome is still visible.
 
@@ -216,6 +219,11 @@ Drizzle migration.
 The application does not currently implement its own login, roles or
 permissions. It expects hosting, a reverse proxy or the corporate platform to
 control access. The board currently records the last editor as `MINE CONTROL`.
+
+The default seed contains employee names. Keep the repository private and
+limit access to approved ICT and operational personnel unless the seed data is
+replaced with non-personal examples. The Mine 2, Mine 3 and Control roles in the
+user manual are operational responsibilities; they are not enforced by the app.
 
 Before production use, ICT should:
 
@@ -281,7 +289,7 @@ to an equipment magnet ID.
 ### Change colours, spacing or TV layout
 
 Edit `app/globals.css`. The most important selectors are the main board header,
-grid/background, `.magnet`, park-up bands, R + R panel and presentation/TV
+grid/background, `.magnet`, four/five-section layout, park-up bands and presentation/TV
 rules. Check both normal edit mode and TV View after any CSS change.
 
 Replace `public/ConsminLogo.png` to update the banner. Keep the same filename,

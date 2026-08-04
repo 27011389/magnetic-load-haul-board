@@ -41,3 +41,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local handover packages and Microsoft Office working files
+*.zip
+~$*.docx
+/docs/manual-a11y.json
+/docs/manual-render/

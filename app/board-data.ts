@@ -1,5 +1,16 @@
 export const BOARD_WIDTH = 1880;
-export const BOARD_HEIGHT = 918;
+export const BOARD_HEIGHT = 940;
+export const SHIFT_WIDTH = BOARD_WIDTH / 2;
+export const LEGACY_SHIFT_WIDTH = 866;
+export const LEGACY_ACTIVE_WIDTH = LEGACY_SHIFT_WIDTH * 2;
+
+export function expandShiftBoardX(x: number) {
+  if (x >= LEGACY_ACTIVE_WIDTH) return x;
+  if (x >= LEGACY_SHIFT_WIDTH) {
+    return SHIFT_WIDTH + Math.round(((x - LEGACY_SHIFT_WIDTH) * SHIFT_WIDTH) / LEGACY_SHIFT_WIDTH);
+  }
+  return Math.round((x * SHIFT_WIDTH) / LEGACY_SHIFT_WIDTH);
+}
 
 export const WORK_ROWS_TOP = 170;
 export const WORK_ROW_HEIGHT = 126;
@@ -65,9 +76,40 @@ export type Magnet = {
   z: number;
   tone: MagnetTone;
   attachedTo?: string;
+  crew?: CrewCode;
+  competencies?: string[];
+  fullName?: string;
 };
 
-export type MagnetTemplate = Pick<Magnet, "kind" | "primary" | "tone" | "width" | "height">;
+export type CrewCode = "A" | "B" | "C";
+
+const FOUR_SECTION_HEIGHT = (PARK_UP_TOP - WORK_ROWS_TOP) / 4;
+
+export function spreadFourSectionMagnets(magnets: Magnet[]) {
+  return magnets.map((magnet) => {
+    if (magnet.crew || magnet.y < WORK_ROWS_TOP || magnet.y >= WORK_ROWS_TOP + WORK_ROW_HEIGHT * 4) return magnet;
+    const row = Math.floor((magnet.y - WORK_ROWS_TOP) / WORK_ROW_HEIGHT);
+    const offset = magnet.y - (WORK_ROWS_TOP + row * WORK_ROW_HEIGHT);
+    return {
+      ...magnet,
+      y: Math.round(WORK_ROWS_TOP + row * FOUR_SECTION_HEIGHT + (offset * FOUR_SECTION_HEIGHT) / WORK_ROW_HEIGHT),
+    };
+  });
+}
+
+export function compactFiveSectionMagnets(magnets: Magnet[]) {
+  return magnets.map((magnet) => {
+    if (magnet.crew || magnet.y < WORK_ROWS_TOP || magnet.y >= PARK_UP_TOP) return magnet;
+    const row = Math.min(3, Math.floor((magnet.y - WORK_ROWS_TOP) / FOUR_SECTION_HEIGHT));
+    const offset = magnet.y - (WORK_ROWS_TOP + row * FOUR_SECTION_HEIGHT);
+    return {
+      ...magnet,
+      y: Math.round(WORK_ROWS_TOP + row * WORK_ROW_HEIGHT + (offset * WORK_ROW_HEIGHT) / FOUR_SECTION_HEIGHT),
+    };
+  });
+}
+
+export type MagnetTemplate = Pick<Magnet, "kind" | "primary" | "tone" | "width" | "height" | "crew" | "competencies" | "fullName">;
 
 export type MagneticBoardState = {
   layoutVersion: number;
@@ -78,19 +120,20 @@ export type MagneticBoardState = {
   roster: string;
   updatedAt: string;
   updatedBy: string;
+  workSectionCount?: 4 | 5;
 };
 
 export const kindDefaults: Record<MagnetKind, { width: number; height: number; tone: MagnetTone }> = {
-  truck: { width: 64, height: 22, tone: "white" },
-  dozer: { width: 64, height: 22, tone: "amber" },
-  grader: { width: 64, height: 22, tone: "orange" },
-  watercart: { width: 68, height: 22, tone: "blue" },
-  excavator: { width: 64, height: 22, tone: "dark" },
-  loader: { width: 64, height: 22, tone: "green" },
-  lightvehicle: { width: 68, height: 22, tone: "slate" },
-  support: { width: 68, height: 22, tone: "teal" },
+  truck: { width: 64, height: 20, tone: "white" },
+  dozer: { width: 64, height: 20, tone: "amber" },
+  grader: { width: 64, height: 20, tone: "orange" },
+  watercart: { width: 68, height: 20, tone: "blue" },
+  excavator: { width: 64, height: 20, tone: "dark" },
+  loader: { width: 64, height: 20, tone: "green" },
+  lightvehicle: { width: 68, height: 20, tone: "slate" },
+  support: { width: 68, height: 20, tone: "teal" },
   location: { width: 150, height: 26, tone: "red" },
-  person: { width: 52, height: 22, tone: "white" },
+  person: { width: 52, height: 20, tone: "white" },
   note: { width: 360, height: 20, tone: "white" },
 };
 
@@ -113,7 +156,9 @@ export function responsiveMagnetWidth(kind: MagnetKind, primary: string, seconda
 
   return Math.ceil(kind === "person"
     ? Math.max(46, textWidth + 20)
-    : Math.max(58, textWidth + 16));
+    : kind === "truck"
+      ? Math.max(46, textWidth + 16)
+      : Math.max(58, textWidth + 16));
 }
 
 export function compactCurrentMagnetWidths(magnets: Magnet[]) {
@@ -124,6 +169,7 @@ export function compactCurrentMagnetWidths(magnets: Magnet[]) {
 }
 
 export function compactMagnetHeight(kind: MagnetKind, height: number) {
+  if (responsiveWidthKinds.has(kind)) return 20;
   const legacyCeiling = kind === "person" ? 29 : kind === "location" || kind === "note" ? 28 : 24;
   return height <= legacyCeiling ? Math.min(height, kindDefaults[kind].height) : height;
 }
@@ -142,7 +188,7 @@ const item = (
     kind,
     primary,
     secondary,
-    x,
+    x: Math.min(expandShiftBoardX(x), BOARD_WIDTH - (responsiveWidth ?? width)),
     y: compactBoardY(y, x),
     width: responsiveWidth ?? width,
     height: compactMagnetHeight(kind, height),
@@ -181,12 +227,13 @@ const floorTruckPairs = (
 });
 
 export const defaultMagneticBoard: MagneticBoardState = {
-  layoutVersion: 9,
+  layoutVersion: 14,
   boardDate: "20 JUL 2026",
   roster: "CREW B · NIGHT 4 OF 7",
   updatedAt: "2026-07-20T09:30:00+08:00",
   updatedBy: "MINE CONTROL",
-  magnets: [
+  workSectionCount: 4,
+  magnets: spreadFourSectionMagnets([
     item("shift-note", "note", "Confirm fuel and park-up locations with Mine Control before end of shift.", 92, 95, 520, 23),
     item("day-supervisor", "person", "PAUL T", 18, 149, 100, 27, "white", "SUPERVISOR"),
     item("day-leaders", "person", "MATT · JOHN C", 722, 149, 132, 27, "white", "TEAM LEADERS"),
@@ -196,7 +243,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
     item("d-radio", "location", "RADIO HILL", 10, 224, 118, 28, "amber", "RL 219 · SHOT 5405"),
     ...equipment("d-radio-assets", "excavator", ["EX30"], 142, 224),
     ...people("d-radio-assets-p", ["RICKY M"], 210, 224),
-    ...equipment("d-radio-dozers", "dozer", ["DZ17"], 142, 254),
+    ...equipment("d-radio-dozers", "dozer", ["DZ017"], 142, 254),
     ...people("d-radio-dozers-p", ["WILLIAM"], 210, 254),
     ...floorTruckPairs("d-radio-trucks", "d-radio-people", ["DT215", "DT217", "DT218", "DT221"], ["JENNA", "KIERAN", "HOLLY", "JOSH"], 218),
     item("d-radio-pickup-lv298", "lightvehicle", "LV298", 480, 224),
@@ -224,7 +271,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
     ...people("d-palo-assets-p", ["MAX"], 210, 662),
     item("d-palo-dozers-dz019", "dozer", "DZ019", 142, 692),
     { ...item("d-palo-dozers-p-huna", "person", "HUNA", 210, 692), attachedTo: "d-palo-dozers-dz019" },
-    item("d-palo-dozers-wd14", "dozer", "WD14", 142, 744),
+    item("d-palo-dozers-wd14", "dozer", "DZ014", 142, 744),
     { ...item("d-palo-dozers-p-will", "person", "WILL", 210, 744), attachedTo: "d-palo-dozers-wd14" },
     ...floorTruckPairs("d-palo-trucks", "d-palo-people", ["DT219", "DT222", "DT223", "DT224", "DT225", "DT226"], ["DAVID B", "EMILY", "TOM", "BLAYN", "EVE", "DAVE"], 656),
 
@@ -238,23 +285,23 @@ export const defaultMagneticBoard: MagneticBoardState = {
     item("n-radio", "location", "RADIO HILL", 878, 224, 118, 28, "amber", "RL 219 · SHOT 5401"),
     ...equipment("n-radio-assets", "excavator", ["EX30"], 1008, 224),
     ...people("n-radio-assets-p", ["ADO"], 1076, 224),
-    ...equipment("n-radio-dozers", "dozer", ["DZ17"], 1008, 254),
+    ...equipment("n-radio-dozers", "dozer", ["DZ017"], 1008, 254),
     ...people("n-radio-dozers-p", ["KAIDEN"], 1076, 254),
-    ...floorTruckPairs("n-radio-trucks", "n-radio-people", ["DT217", "DT218", "DT221", "DT222"], ["SEPH", "DAVID S", "REHAN", "REN"], 218).map((magnet) => ({ ...magnet, x: magnet.x + 870 })),
+    ...floorTruckPairs("n-radio-trucks", "n-radio-people", ["DT217", "DT218", "DT221", "DT222"], ["SEPH", "DAVID S", "REHAN", "REN"], 218).map((magnet) => ({ ...magnet, x: magnet.x + SHIFT_WIDTH })),
 
     item("n-corgan", "location", "CORGAN", 878, 370, 118, 28, "teal", "RL 273 · SHOT 8901"),
     ...equipment("n-corgan-assets", "excavator", ["EX29"], 1008, 370),
     ...people("n-corgan-assets-p", ["KINGI"], 1076, 370),
     ...equipment("n-corgan-dozer", "dozer", ["DZ018"], 1008, 400),
     ...people("n-corgan-dozer-p", ["BOSTON"], 1076, 400),
-    ...floorTruckPairs("n-corgan-trucks", "n-corgan-people", ["DT69", "DT71", "DT73", "DT74", "DT75"], ["COLIN", "ANNETTE", "IZAAC", "TWO SHOES", "TEAU"], 364).map((magnet) => ({ ...magnet, x: magnet.x + 870 })),
+    ...floorTruckPairs("n-corgan-trucks", "n-corgan-people", ["DT69", "DT71", "DT73", "DT74", "DT75"], ["COLIN", "ANNETTE", "IZAAC", "TWO SHOES", "TEAU"], 364).map((magnet) => ({ ...magnet, x: magnet.x + SHIFT_WIDTH })),
 
     item("n-palo", "location", "PALO", 878, 516, 118, 28, "blue", "RL 246 · SHOT 5606"),
     ...equipment("n-palo-assets", "excavator", ["EX31"], 1008, 516),
     ...people("n-palo-assets-p", ["SAMSON"], 1076, 516),
-    ...equipment("n-palo-dozer", "dozer", ["WD14"], 1008, 546),
+    ...equipment("n-palo-dozer", "dozer", ["DZ014"], 1008, 546),
     ...people("n-palo-dozer-p", ["CAMERON"], 1076, 546),
-    ...floorTruckPairs("n-palo-trucks", "n-palo-people", ["DT216", "DT219", "DT223", "DT224", "DT226"], ["MAJELLA", "NICK", "JEREMY", "ANDREW", "NAE"], 510).map((magnet) => ({ ...magnet, x: magnet.x + 870 })),
+    ...floorTruckPairs("n-palo-trucks", "n-palo-people", ["DT216", "DT219", "DT223", "DT224", "DT226"], ["MAJELLA", "NICK", "JEREMY", "ANDREW", "NAE"], 510).map((magnet) => ({ ...magnet, x: magnet.x + SHIFT_WIDTH })),
 
     item("n-hotseat", "location", "RADIO HILL HOT SEAT", 1400, 662, 174, 26, "red"),
     ...equipment("n-hotseat-support", "support", ["WD001"], 1400, 692),
@@ -264,8 +311,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
     ...equipment("n-hotseat-water", "watercart", ["WC018"], 1400, 772),
     ...people("n-hotseat-water-p", ["YD"], 1472, 772),
 
-    ...people("rr", ["MIKE S", "MATTHEW", "MITCHELL", "ROWAN", "STU", "ROO", "ANTHONY H", "AYDEN", "MICK C", "CONNOR", "ETHAN A", "PAUL H", "GLEN", "COREY", "ZAC R", "REUBEN", "SUSIE", "WAYNE", "BEN", "TREVOR", "MICHELLE"], 1740, 212),
-  ],
+  ]),
 };
 
 const templates = (kind: MagnetKind, labels: string[]): MagnetTemplate[] =>
@@ -276,17 +322,69 @@ const templates = (kind: MagnetKind, labels: string[]): MagnetTemplate[] =>
     width: responsiveMagnetWidth(kind, primary) ?? kindDefaults[kind].width,
   }));
 
+const crewPeople = (crew: CrewCode, names: string[]): MagnetTemplate[] => names.map((fullName) => {
+  const primary = fullName.split(" ")[0];
+  return {
+    kind: "person",
+    primary,
+    fullName,
+    crew,
+    competencies: [],
+    ...kindDefaults.person,
+    width: responsiveMagnetWidth("person", primary) ?? kindDefaults.person.width,
+  };
+});
+
+// Imported from the three personnel matrices supplied for 20/07/2026. Competencies
+// remain editable on each magnet because training status changes independently of crew.
+export const crewRosters: Record<CrewCode, MagnetTemplate[]> = {
+  A: crewPeople("A", [
+    "SONYA ABDULLAH", "COLIN ANSELL", "LEONARD ARTCH", "ANDREW BELL", "DAVID BENSON",
+    "ANDREW BRIGHT", "MALCOLM BRUIN", "NEVILLE CAHILL", "IZAAC CAPORN", "JEAN CARLOS RIBEIRO",
+    "SAMMIE CATE", "BRENDON COOPER", "TEAU DANIEL", "YINGWEI DIALLOGO", "KAIDEN HOFMEYER",
+    "RONALD HOOPER", "JEREMY HSU", "ADRIAN INESON", "REUBEN KEEPA", "THOMAS KELLY",
+    "ANTHONY LLOYD", "NICHOLAS LLOYD", "MUNASHE MACHOKOTO", "JOSEPH MAHILUM", "LUKUDU MANASE",
+    "KINGI MARTIN", "REHAN MCMURDO", "MAJELLA METUAMATE", "AARON MILLER", "ANNETTE MURCOTT",
+    "CAMERON PRICE", "BOSTON RAESIDE", "SCOTT ROBERTSON", "SAMSON SEBAR", "DAVID SIVOUR",
+    "JAKSON TIMMER", "SCOTT TSAOUSIS", "BALLIF WATENE", "AARON WATT", "RENATA WERAHIKO",
+    "BENJAMIN WILKINSON", "TROY WOODROFFE", "BRETT WYNNE", "EUGENE YEBOAH",
+  ]),
+  B: crewPeople("B", [
+    "JOSHUA ANDREWS", "ABEL ATSBEHA", "HOLLY BLANCH", "SHANE CARR", "JOHN CLARE",
+    "MAREE DEACON", "SUZETTE DU PLESSIS", "WAYNE GANE", "JOSEPH GOODWIN", "PAUL HAMLIN",
+    "CHAD HENDRIKS", "JASON HERRING", "TYRONE HERRING", "CHRISTOPHER HOPKINSON", "BRADLEY JESSUP",
+    "WILLIAM JOHNSON", "HUNA KEEPA", "RYAN LARSEN", "EMILY LUCKMAN", "RICKY MAC CUSPIE",
+    "EVE MATTHEWS", "TRAVIS MCCOSKER", "MATTHEW MCGAULEY", "DAVID MCPHEE", "MICHAELA MILLER",
+    "BLAYN MILNE", "KARENE NIGHTINGALE", "MAREE PEDRO", "DYLAN RANN", "WIRIMU HOHEPA ROBERTS",
+    "KIERAN RUSSELL", "PAUL SCHAEFER-MCCLUSKEY", "HELEN SHAW", "SUN SIMONS", "MAXWELL SMITH",
+    "REUBEN STEADMAN", "GREGORY SUITOR", "KEVIN WAKEFIELD", "JENNA WALLBANK", "NICHOLAS WARDELL",
+    "DAVID WEBSTER", "PETER WILKINSON", "SUSANNAH WOODS",
+  ]),
+  C: crewPeople("C", [
+    "ETHAN ABRAHAM", "WAYNE BELL", "RAFAEL BEMBENUTO", "FRANCIS COOK", "MICHAEL CORCORAN",
+    "JOSHUA CROSSWELL", "COREY DE MALMANCHE", "JULIA DIAZ", "TRAC GAPPER", "MITCHELL GILLESPIE",
+    "STUART GREENOCK", "ANTHONY HANNAFORD", "SAMUEL HYNDMAN", "CASEY JELLIS", "JURNEE JERRY-WALKER",
+    "AYDEN KELLY", "TATIANA LEEF", "CHIA-YU LIN", "ETHAN MACMILLAN", "JOHN MCKENNA",
+    "DYLAN MELVILLE", "SHANE MOSELEY", "LAONA MULLINGS", "PHILLIP NELSON", "JOHN PORTER",
+    "JADE POWELL", "GLEN RADOVAN", "ARAPERE RATIMA", "BENJAMIN REEDY", "ZAC REEKIE",
+    "CONNOR RIDGWAY", "TIMOTHY SANSON", "AARON STURGESS", "MICHAEL STURGESS", "KASMALI SUMAILI",
+    "MATHEW TAYLOR", "SHANE TEAGUE", "JOHN THORNTON", "ROWAN TOCKNELL", "ALESSIA WEIR",
+  ]),
+};
+
 export const magnetInventory: MagnetTemplate[] = [
   ...templates("truck", ["DT62", "DT63", "DT64", "DT65", "DT66", "DT67", "DT68", "DT69", "DT70", "DT71", "DT72", "DT73", "DT74", "DT75", "DT76", "DT77", "DT214", "DT215", "DT216", "DT217", "DT218", "DT219", "DT221", "DT222", "DT223", "DT224", "DT225", "DT226"]),
-  ...templates("dozer", ["DZ17", "DZ018", "DZ019", "WD14"]),
+  ...templates("dozer", ["DZ014", "DZ017", "DZ018", "DZ019"]),
   ...templates("grader", ["GR012", "GR013", "GR014"]),
   ...templates("watercart", ["WC012", "WC018", "WC019", "WC20", "WC201"]),
   ...templates("excavator", ["EX25", "EX27", "EX28", "EX29", "EX30", "EX31", "EX32"]),
   ...templates("loader", ["WL34", "WL35", "WL36"]),
   ...templates("lightvehicle", ["LV232", "LV258", "LV265", "LV297", "LV298", "LV304", "LV308"]),
   ...templates("support", ["BUS10", "BUS11", "BUS12", "BUS13", "IT15", "IT19", "V304", "WD001"]),
-  ...templates("person", ["PAUL T", "MATT", "JOHN C", "BEVAN", "RON", "BRETT", "NEV", "RICKY M", "WILLIAM", "JENNA", "KIERAN", "HOLLY", "RED", "CHAD H", "JASON H", "SUITS", "MICHAELA", "SHANE", "DAVE W", "BEAU", "KANE", "PETER", "SUZETTE", "KARENE", "CHRIS", "MAX", "WILL", "DAVID B", "EMILY", "TOM", "BLAYN", "EVE", "DAVE", "ADO", "KAIDEN", "SEPH", "DAVID S", "REHAN", "REN", "KINGI", "BOSTON", "COLIN", "ANNETTE", "IZAAC", "TWO SHOES", "TEAU", "SAMSON", "CAMERON", "MAJELLA", "NICK", "JEREMY", "ANDREW", "NAE", "REUBS", "EUGENE", "TROY", "BALLIF", "YD", "ROBBO", "JACKSON", "BRENDON", "JEAN", "NASH", "LIN", "LESS", "ANT", "RAF", "MIKE S", "RICK", "MATTHEW", "MITCHELL", "CAZ", "COOKIE", "SHANE M", "ROWAN", "AARON", "STU", "ROO", "PHILLIP N", "BENJI", "ANTHONY H", "AYDEN", "MICK C", "JURNEE", "CONNOR", "ARAZ", "KASMALI", "ETHAN A", "PAUL H", "GLEN", "COREY", "SHANE T", "HELEN", "JOHNNO", "SAM H", "ZAC R", "WAYEN", "FARMER", "LUKUDU", "SUN", "REUBEN", "SUSIE", "WAYNE", "BEN", "MAREE", "TREVOR", "FRIDGE", "MICHELLE", "GEORGE", "JASON", "ETHAN C", "JOHN M", "LEE", "JOSHUA", "TIM S", "LAONA", "ETHAN", "MALCOM", "SONYA", "ABEL", "JULIAN", "TRAC", "TATIANA"]),
-  ...templates("location", ["CHRIS D PIT", "RADIO HILL", "CORGAN", "PALO", "BIG MACK", "RHODES ROM", "DIRECT CART", "RADIO HILL HOT SEAT", "CHRIS/D HOTSEAT", "CHRIS D HOTSEAT BAY", "CORGAN HOT SEAT BAY", "BIG MACK HOTSEAT BAY", "CRIB-HUT GO-LINE", "WORKSHOP DEAD LINE", "GRAVEYARD", "ORE CARTAGE", "CAMP", "MILL", "TRAINING", "U/S", "ON LEAVE / SICK"]),
+  ...crewRosters.A,
+  ...crewRosters.B,
+  ...crewRosters.C,
+  ...templates("location", ["CHRIS D PIT", "RADIO HILL", "CORGAN", "PALO", "BIG MACK", "RHODES ROM", "DIRECT CART", "RADIO HILL HOT SEAT", "CHRIS/D HOTSEAT", "CHRIS D HOTSEAT BAY", "CORGAN HOT SEAT BAY", "BIG MACK HOTSEAT BAY", "CRIB-HUT GO-LINE", "WORKSHOP DEAD LINE", "GRAVEYARD", "ORE CARTAGE", "CAMP", "MILL", "TRAINING", "U/S", "D&A","TRAMMING",  "ON LEAVE / SICK"]),
 ];
 
 export const magnetKindLabels: Record<MagnetKind, string> = {

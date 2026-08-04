@@ -7,12 +7,15 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  SHIFT_WIDTH,
+  LEGACY_ACTIVE_WIDTH,
   LEGACY_PARK_UP_TOP,
   LEGACY_WORK_ROWS_TOP,
   LEGACY_WORK_ROW_HEIGHT,
@@ -21,6 +24,10 @@ import {
   compactBoardY,
   compactCurrentMagnetWidths,
   compactMagnetHeight,
+  compactFiveSectionMagnets,
+  expandShiftBoardX,
+  spreadFourSectionMagnets,
+  crewRosters,
   responsiveMagnetWidth,
   defaultMagneticBoard,
   kindDefaults,
@@ -28,6 +35,7 @@ import {
   magnetKindLabels,
   magnetToneOptions,
   type Magnet,
+  type CrewCode,
   type MagnetKind,
   type MagnetTemplate,
   type MagneticBoardState,
@@ -50,9 +58,11 @@ type CommitOptions = {
 };
 
 type ShiftSide = "day" | "night";
+type TvShiftView = "both" | ShiftSide;
 
 const ATTACH_DISTANCE = 36;
 const ATTACH_GAP = 4;
+const TV_SHARED_HEADER_HEIGHT = 100;
 const V4_WORK_ROWS_TOP = 218;
 const V4_WORK_ROW_HEIGHT = 112;
 const V4_PARK_UP_TOP = 778;
@@ -66,6 +76,7 @@ const PARK_UP_ZONE_NAMES = new Set([
   "BIG MACK SHUT PAD",
   "WORKSHOP GO LINE",
   "WORKSHOP",
+  "LONG-TERM PARK-UP",
 ]);
 const ATTACHABLE_KINDS = new Set<MagnetKind>([
   "truck", "dozer", "grader", "watercart", "excavator",
@@ -77,7 +88,11 @@ const PARK_UP_ROWS = [
   { label: "SHUT PAD", tone: "red", zones: ["RADIO HILL SHUT PAD", "CORGAN SHUT PAD", "CHRIS D SHUT PAD", "BIG MACK SHUT PAD"] },
   { label: "WORKSHOP", tone: "orange", zones: ["WORKSHOP GO LINE", "WORKSHOP"] },
   { label: "STANDBY", tone: "slate", zones: ["UNALLOCATED / STANDBY"] },
+  { label: "GRAVEYARD", tone: "violet", zones: ["LONG-TERM PARK-UP"] },
 ] as const;
+
+// Reserve the printed lane-name area at the start of each bottom zone.
+const PARK_UP_ZONE_LABEL_CLEARANCE = 150;
 
 const cloneBoard = (board: MagneticBoardState): MagneticBoardState => ({
   ...board,
@@ -87,7 +102,7 @@ const cloneBoard = (board: MagneticBoardState): MagneticBoardState => ({
 
 const isWorkingOperator = (magnet: Magnet) =>
   magnet.kind === "person" &&
-  magnet.x < 1732 &&
+  magnet.x < BOARD_WIDTH &&
   magnet.y >= WORK_ROWS_TOP &&
   magnet.y < PARK_UP_TOP;
 
@@ -97,7 +112,7 @@ function countParkUpZones(magnets: Magnet[]) {
   );
   const equipment = magnets.filter((magnet) => ATTACHABLE_KINDS.has(magnet.kind));
   const innerLeft = 8;
-  const innerWidth = 1716;
+  const innerWidth = BOARD_WIDTH - 16;
   const labelWidth = 82;
 
   PARK_UP_ROWS.forEach((row, rowIndex) => {
@@ -115,6 +130,42 @@ function countParkUpZones(magnets: Magnet[]) {
   });
 
   return counts;
+}
+
+function parkUpZoneRects() {
+  const innerLeft = 8;
+  const innerWidth = BOARD_WIDTH - 16;
+  const labelWidth = 82;
+  return PARK_UP_ROWS.flatMap((row, rowIndex) => {
+    const top = PARK_UP_TOP + 3 + rowIndex * 22;
+    const zoneWidth = (innerWidth - labelWidth - row.zones.length * 3) / row.zones.length;
+    return row.zones.map((zone, zoneIndex) => {
+      const left = innerLeft + labelWidth + 3 + zoneIndex * (zoneWidth + 3);
+      return { zone, left, right: left + zoneWidth, top, bottom: top + 20 };
+    });
+  });
+}
+
+function snapGroupToParkUpZone(magnets: Magnet[], id: string) {
+  const anchor = magnets.find((magnet) => magnet.id === id);
+  if (!anchor) return null;
+  const centreX = anchor.x + anchor.width / 2;
+  const centreY = anchor.y + anchor.height / 2;
+  const zone = parkUpZoneRects().find((rect) =>
+    centreX >= rect.left && centreX < rect.right && centreY >= rect.top - 2 && centreY < rect.bottom + 2,
+  );
+  if (!zone) return null;
+
+  const groupIds = linkedGroupIds(magnets, id);
+  const group = magnets.filter((magnet) => groupIds.has(magnet.id));
+  const rightOffset = Math.max(...group.map((magnet) => magnet.x + magnet.width - anchor.x));
+  const firstX = zone.left + PARK_UP_ZONE_LABEL_CLEARANCE;
+  const lastX = zone.right - rightOffset - 4;
+  for (let x = firstX; x <= lastX; x += 4) {
+    const snapped = moveLinkedGroup(magnets, id, Math.round(x), zone.top, false);
+    if (snapped) return snapped;
+  }
+  return null;
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -178,7 +229,9 @@ function inferNearbyAttachments(magnets: Magnet[]) {
     const target = magnets
       .filter((candidate) => ATTACHABLE_KINDS.has(candidate.kind) && !claimed.has(candidate.id))
       .map((candidate) => ({ candidate, distance: rectangleDistance(magnet, candidate) }))
-      .filter(({ distance }) => distance <= 8)
+      .filter(({ candidate, distance }) =>
+        distance <= 8 && magnet.x >= candidate.x + candidate.width,
+      )
       .sort((a, b) => a.distance - b.distance)[0]?.candidate;
     if (!target) return magnet;
     claimed.add(target.id);
@@ -188,15 +241,27 @@ function inferNearbyAttachments(magnets: Magnet[]) {
   return { magnets: next, changed };
 }
 
-function moveLinkedGroup(magnets: Magnet[], id: string, requestedX: number, requestedY: number) {
+function linkedGroupIds(magnets: Magnet[], id: string) {
   const anchor = magnets.find((magnet) => magnet.id === id);
-  if (!anchor) return null;
-  const groupIds = new Set([
+  return new Set([
     id,
-    ...(ATTACHABLE_KINDS.has(anchor.kind)
+    ...(anchor && ATTACHABLE_KINDS.has(anchor.kind)
       ? magnets.filter((magnet) => magnet.attachedTo === id).map((magnet) => magnet.id)
       : []),
   ]);
+}
+
+function linkedGroupOverlaps(magnets: Magnet[], id: string) {
+  const groupIds = linkedGroupIds(magnets, id);
+  return magnets.some((magnet) =>
+    groupIds.has(magnet.id) && collidesWithOthers(magnet, magnets, groupIds),
+  );
+}
+
+function moveLinkedGroup(magnets: Magnet[], id: string, requestedX: number, requestedY: number, allowOverlap = false) {
+  const anchor = magnets.find((magnet) => magnet.id === id);
+  if (!anchor) return null;
+  const groupIds = linkedGroupIds(magnets, id);
   const group = magnets.filter((magnet) => groupIds.has(magnet.id));
   const minDx = Math.max(...group.map((magnet) => -magnet.x));
   const maxDx = Math.min(...group.map((magnet) => BOARD_WIDTH - magnet.x - magnet.width));
@@ -205,9 +270,38 @@ function moveLinkedGroup(magnets: Magnet[], id: string, requestedX: number, requ
   const dx = clamp(requestedX - anchor.x, minDx, maxDx);
   const dy = clamp(requestedY - anchor.y, minDy, maxDy);
   const moved = group.map((magnet) => ({ ...magnet, x: magnet.x + dx, y: magnet.y + dy }));
-  if (moved.some((magnet) => collidesWithOthers(magnet, magnets, groupIds))) return null;
+  if (!allowOverlap && moved.some((magnet) => collidesWithOthers(magnet, magnets, groupIds))) return null;
   const movedById = new Map(moved.map((magnet) => [magnet.id, magnet]));
   return magnets.map((magnet) => movedById.get(magnet.id) ?? magnet);
+}
+
+function moveGroupToNearestOpenPosition(magnets: Magnet[], id: string) {
+  const anchor = magnets.find((magnet) => magnet.id === id);
+  if (!anchor) return null;
+  const step = 4;
+  const maxRadius = Math.max(BOARD_WIDTH, BOARD_HEIGHT);
+  let best: { magnets: Magnet[]; distance: number } | null = null;
+
+  for (let radius = step; radius <= maxRadius; radius += step) {
+    if (best && radius > best.distance) break;
+    const offsets: Array<[number, number]> = [];
+    for (let offset = -radius; offset <= radius; offset += step) {
+      offsets.push([offset, -radius], [offset, radius]);
+      if (Math.abs(offset) !== radius) offsets.push([-radius, offset], [radius, offset]);
+    }
+    offsets.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]));
+
+    for (const [dx, dy] of offsets) {
+      const moved = moveLinkedGroup(magnets, id, anchor.x + dx, anchor.y + dy);
+      if (!moved || linkedGroupOverlaps(moved, id)) continue;
+      const movedAnchor = moved.find((magnet) => magnet.id === id);
+      if (!movedAnchor) continue;
+      const distance = Math.hypot(movedAnchor.x - anchor.x, movedAnchor.y - anchor.y);
+      if (!best || distance < best.distance) best = { magnets: moved, distance };
+    }
+  }
+
+  return best?.magnets ?? null;
 }
 
 function findOpenPosition(
@@ -236,6 +330,140 @@ function findOpenPosition(
   return null;
 }
 
+function cleanUpTruckMagnets(magnets: Magnet[], sectionCount: 4 | 5) {
+  const truckTemplates = magnetInventory.filter((template) => template.kind === "truck");
+  const sectionHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / sectionCount;
+  const existingTrucks = magnets.filter((magnet) => magnet.kind === "truck");
+  const retained = magnets.filter((magnet) => magnet.kind !== "truck");
+  const cleanedTrucks: Magnet[] = [];
+  const truckPositions = new Map<string, Magnet>();
+  let nextZ = Math.max(1, ...magnets.map((magnet) => magnet.z)) + 1;
+
+  (["day", "night"] as ShiftSide[]).forEach((side) => {
+    const left = side === "day" ? 0 : SHIFT_WIDTH;
+    const sideTrucks = existingTrucks.filter((magnet) => magnet.x >= left && magnet.x < left + SHIFT_WIDTH);
+    const byUnit = new Map(sideTrucks.map((magnet) => [magnet.primary.toUpperCase(), magnet]));
+    const groups: Magnet[][] = Array.from({ length: sectionCount }, () => []);
+
+    truckTemplates.forEach((template) => {
+      const existing = byUnit.get(template.primary.toUpperCase());
+      const magnet: Magnet = existing ?? {
+        ...template,
+        id: `fleet-${side}-${template.primary.toLowerCase()}`,
+        x: left + 270,
+        y: WORK_ROWS_TOP,
+        z: nextZ++,
+      };
+      if (existing) {
+        const row = Math.max(0, Math.min(sectionCount - 1, Math.floor((existing.y - WORK_ROWS_TOP) / sectionHeight)));
+        groups[row].push(magnet);
+      } else {
+        const smallestGroup = groups.reduce((best, group) => group.length < best.length ? group : best, groups[0]);
+        smallestGroup.push(magnet);
+      }
+    });
+
+    groups.forEach((group, row) => {
+      group.sort((a, b) => a.primary.localeCompare(b.primary, undefined, { numeric: true }));
+      group.forEach((magnet, index) => {
+        const stackRow = index % 4;
+        const column = Math.floor(index / 4);
+        const positioned = {
+          ...magnet,
+          x: left + 270 + column * 145,
+          y: Math.round(WORK_ROWS_TOP + row * sectionHeight + 68 + stackRow * 22),
+          height: 20,
+          z: nextZ++,
+        };
+        cleanedTrucks.push(positioned);
+        truckPositions.set(positioned.id, positioned);
+      });
+    });
+  });
+
+  const retainedIds = new Set(cleanedTrucks.map((truck) => truck.id));
+  const repositioned = retained.map((magnet) => {
+    if (magnet.kind !== "person" || !magnet.attachedTo) return magnet;
+    const truck = truckPositions.get(magnet.attachedTo);
+    if (truck) {
+      return { ...magnet, x: truck.x + truck.width + 4, y: truck.y, z: truck.z + 1 };
+    }
+    return retainedIds.has(magnet.attachedTo) ? magnet : { ...magnet, attachedTo: undefined };
+  });
+
+  return [...repositioned, ...cleanedTrucks];
+}
+
+const AUX_WATER_UNITS = new Set(["WC018", "WC019", "WC201"]);
+const AUX_RESET_COLUMNS = [
+  ["DZ014", "DZ017", "DZ018", "DZ019", "WD001"],
+  ["WC019", "WC201", "WC018", "GR012", "GR013", "GR014"],
+] as const;
+const AUX_UNIT_ALIASES: Record<string, string> = { DZ17: "DZ017", WD14: "DZ014" };
+const canonicalAuxUnit = (unit: string) => AUX_UNIT_ALIASES[unit.toUpperCase()] ?? unit.toUpperCase();
+const isAuxiliaryMagnet = (magnet: Pick<Magnet, "kind" | "primary">) =>
+  magnet.kind === "grader" ||
+  magnet.kind === "dozer" ||
+  magnet.kind === "watercart" ||
+  (magnet.kind === "support" && magnet.primary.toUpperCase() === "WD001");
+
+function resetAuxiliaryMagnetsToMiddle(magnets: Magnet[]) {
+  const auxiliaryTemplates = magnetInventory.filter((template) =>
+    template.kind === "grader" ||
+    template.kind === "dozer" ||
+    (template.kind === "watercart" && AUX_WATER_UNITS.has(template.primary)) ||
+    (template.kind === "support" && template.primary === "WD001"),
+  );
+  const existingAux = magnets.filter(isAuxiliaryMagnet);
+  const existingAuxIds = new Set(existingAux.map((magnet) => magnet.id));
+  const retained = magnets.filter((magnet) => !isAuxiliaryMagnet(magnet));
+  const cleanedAux: Magnet[] = [];
+  const auxPositions = new Map<string, Magnet>();
+  let nextZ = Math.max(1, ...magnets.map((magnet) => magnet.z)) + 1;
+
+  (["day", "night"] as ShiftSide[]).forEach((side) => {
+    const left = side === "day" ? 0 : SHIFT_WIDTH;
+    const sideAux = existingAux.filter((magnet) => magnet.x >= left && magnet.x < left + SHIFT_WIDTH);
+    const byUnit = new Map(sideAux.map((magnet) => [canonicalAuxUnit(magnet.primary), magnet]));
+    const sideMagnets = auxiliaryTemplates.map((template) => {
+      const existing = byUnit.get(template.primary);
+      return existing ? { ...existing, kind: template.kind, primary: template.primary, tone: template.tone } : {
+        ...template,
+        id: `aux-${side}-${template.primary.toLowerCase()}`,
+        x: left + SHIFT_WIDTH / 2,
+        y: WORK_ROWS_TOP,
+        z: nextZ++,
+      };
+    });
+
+    const byResetUnit = new Map(sideMagnets.map((magnet) => [magnet.primary, magnet]));
+    AUX_RESET_COLUMNS.forEach((units, column) => {
+      units.forEach((unit, row) => {
+        const magnet = byResetUnit.get(unit);
+        if (!magnet) return;
+        const positioned = {
+          ...magnet,
+          x: Math.round(left + 600 + column * 64),
+          y: WORK_ROWS_TOP + 4 + row * 22,
+          height: 20,
+          z: nextZ++,
+        };
+        cleanedAux.push(positioned);
+        auxPositions.set(positioned.id, positioned);
+      });
+    });
+  });
+
+  const repositioned = retained.map((magnet) => {
+    if (magnet.kind !== "person" || !magnet.attachedTo) return magnet;
+    const auxiliary = auxPositions.get(magnet.attachedTo);
+    if (auxiliary) return { ...magnet, x: auxiliary.x + auxiliary.width + 4, y: auxiliary.y, z: auxiliary.z + 1 };
+    return existingAuxIds.has(magnet.attachedTo) ? { ...magnet, attachedTo: undefined } : magnet;
+  });
+
+  return [...repositioned, ...cleanedAux];
+}
+
 function attachPersonToNearestEquipment(magnets: Magnet[], personId: string) {
   const person = magnets.find((magnet) => magnet.id === personId && magnet.kind === "person");
   if (!person) return magnets;
@@ -246,24 +474,22 @@ function attachPersonToNearestEquipment(magnets: Magnet[], personId: string) {
   const targets = magnets
     .filter((magnet) => ATTACHABLE_KINDS.has(magnet.kind) && !occupiedTargets.has(magnet.id))
     .map((target) => ({ target, distance: rectangleDistance(person, target) }))
-    .filter(({ distance }) => distance <= ATTACH_DISTANCE)
+    .filter(({ target, distance }) =>
+      distance <= ATTACH_DISTANCE && person.x + person.width / 2 >= target.x + target.width,
+    )
     .sort((a, b) => a.distance - b.distance);
 
   for (const { target } of targets) {
-    const candidates = [
-      { x: target.x + target.width + ATTACH_GAP, y: target.y + (target.height - person.height) / 2 },
-      { x: target.x - person.width - ATTACH_GAP, y: target.y + (target.height - person.height) / 2 },
-      { x: target.x + (target.width - person.width) / 2, y: target.y + target.height + ATTACH_GAP },
-      { x: target.x + (target.width - person.width) / 2, y: target.y - person.height - ATTACH_GAP },
-    ].sort((a, b) =>
-      Math.hypot(a.x - person.x, a.y - person.y) - Math.hypot(b.x - person.x, b.y - person.y),
-    );
-    for (const position of candidates) {
-      const candidate = { ...person, ...position, attachedTo: target.id, z: target.z + 1 };
-      if (!isInsideBoard(candidate)) continue;
-      if (collidesWithOthers(candidate, magnets, new Set([person.id]))) continue;
-      return magnets.map((magnet) => magnet.id === person.id ? candidate : magnet);
-    }
+    const candidate = {
+      ...person,
+      x: target.x + target.width + ATTACH_GAP,
+      y: target.y + (target.height - person.height) / 2,
+      attachedTo: target.id,
+      z: target.z + 1,
+    };
+    if (!isInsideBoard(candidate)) continue;
+    if (collidesWithOthers(candidate, magnets, new Set([person.id]))) continue;
+    return magnets.map((magnet) => magnet.id === person.id ? candidate : magnet);
   }
   return magnets.map((magnet) =>
     magnet.id === person.id ? { ...magnet, attachedTo: undefined } : magnet,
@@ -303,6 +529,7 @@ export default function Home() {
   const [presentation, setPresentation] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>("loading");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [invalidDropId, setInvalidDropId] = useState<string | null>(null);
   const [editorMagnet, setEditorMagnet] = useState<Magnet | null>(null);
   const [isNewMagnet, setIsNewMagnet] = useState(false);
   const [rackOpen, setRackOpen] = useState(false);
@@ -313,8 +540,12 @@ export default function Home() {
   const [undoStack, setUndoStack] = useState<MagneticBoardState[]>([]);
   const [shiftEditorOpen, setShiftEditorOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [crewDialogOpen, setCrewDialogOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [tvScale, setTvScale] = useState(1);
+  const [tvScaleY, setTvScaleY] = useState(1);
+  const [tvHeaderScale, setTvHeaderScale] = useState(1);
+  const [tvShiftView, setTvShiftView] = useState<TvShiftView>("both");
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const keyboardHistoryRef = useRef<MagneticBoardState | null>(null);
@@ -326,16 +557,28 @@ export default function Home() {
     if (!presentation) return;
 
     const fitBoardToScreen = () => {
-      setTvScale(Math.min(
-        window.innerWidth / BOARD_WIDTH,
-        window.innerHeight / BOARD_HEIGHT,
-      ));
+      const visibleWidth = tvShiftView === "both" ? BOARD_WIDTH : SHIFT_WIDTH;
+      if (tvShiftView === "both") {
+        const scale = Math.min(
+          window.innerWidth / visibleWidth,
+          window.innerHeight / BOARD_HEIGHT,
+        );
+        setTvScale(scale);
+        setTvScaleY(scale);
+        setTvHeaderScale(scale);
+      } else {
+        const headerScale = window.innerWidth / BOARD_WIDTH;
+        const availableBodyHeight = window.innerHeight - TV_SHARED_HEADER_HEIGHT * headerScale;
+        setTvHeaderScale(headerScale);
+        setTvScale(window.innerWidth / visibleWidth);
+        setTvScaleY(availableBodyHeight / (PARK_UP_TOP - TV_SHARED_HEADER_HEIGHT));
+      }
     };
 
     fitBoardToScreen();
     window.addEventListener("resize", fitBoardToScreen);
     return () => window.removeEventListener("resize", fitBoardToScreen);
-  }, [presentation]);
+  }, [presentation, tvShiftView]);
 
   useEffect(() => {
     const updateFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -347,23 +590,27 @@ export default function Home() {
     const trucks = board.magnets.filter((item) => item.kind === "truck");
     const allocated = (item: Magnet) => item.y >= WORK_ROWS_TOP && item.y < PARK_UP_TOP;
     return {
-      dayAllocated: trucks.filter((item) => item.x < 866 && allocated(item)).length,
-      dayUnallocated: trucks.filter((item) => item.x < 866 && !allocated(item)).length,
-      nightAllocated: trucks.filter((item) => item.x >= 866 && item.x < 1732 && allocated(item)).length,
-      nightUnallocated: trucks.filter((item) => item.x >= 866 && item.x < 1732 && !allocated(item)).length,
+      dayAllocated: trucks.filter((item) => item.x < SHIFT_WIDTH && allocated(item)).length,
+      dayUnallocated: trucks.filter((item) => item.x < SHIFT_WIDTH && !allocated(item)).length,
+      nightAllocated: trucks.filter((item) => item.x >= SHIFT_WIDTH && allocated(item)).length,
+      nightUnallocated: trucks.filter((item) => item.x >= SHIFT_WIDTH && !allocated(item)).length,
     };
   }, [board.magnets]);
 
-  const filteredInventory = useMemo(() => magnetInventory.filter((item) =>
-    (rackKind === "all" || item.kind === rackKind) &&
-    item.primary.toLowerCase().includes(rackSearch.trim().toLowerCase()),
-  ), [rackKind, rackSearch]);
+  const filteredInventory = useMemo(() => {
+    const query = rackSearch.trim().toLowerCase();
+    return magnetInventory.filter((item) =>
+      (rackKind === "all" || item.kind === rackKind) &&
+      (item.primary.toLowerCase().includes(query) || item.fullName?.toLowerCase().includes(query)),
+    );
+  }, [rackKind, rackSearch]);
 
   const boardSearchResults = useMemo(() => {
     const query = findQuery.trim().toLowerCase();
     if (!query) return [];
     return board.magnets.filter((magnet) =>
       magnet.primary.toLowerCase().includes(query) ||
+      magnet.fullName?.toLowerCase().includes(query) ||
       magnet.secondary?.toLowerCase().includes(query),
     );
   }, [board.magnets, findQuery]);
@@ -371,6 +618,16 @@ export default function Home() {
   const unassignedOperators = useMemo(() => board.magnets.filter((magnet) =>
     isWorkingOperator(magnet) && !magnet.attachedTo,
   ), [board.magnets]);
+
+  const linkedMagnetIds = useMemo(() => {
+    const ids = new Set<string>();
+    board.magnets.forEach((magnet) => {
+      if (!magnet.attachedTo) return;
+      ids.add(magnet.id);
+      ids.add(magnet.attachedTo);
+    });
+    return ids;
+  }, [board.magnets]);
 
   const parkUpCounts = useMemo(() => countParkUpZones(board.magnets), [board.magnets]);
   const totalParked = useMemo(
@@ -460,10 +717,18 @@ export default function Home() {
             payload.board.layoutVersion === 6
             || payload.board.layoutVersion === 7
             || payload.board.layoutVersion === 8
+            || payload.board.layoutVersion === 10
+            || payload.board.layoutVersion === 11
           ) {
-            const magnets = compactCurrentMagnetWidths(payload.board.magnets);
+            const expandMagnets = (magnets: Magnet[]) => compactCurrentMagnetWidths(magnets
+              .filter((magnet) => magnet.x < LEGACY_ACTIVE_WIDTH)
+              .map((magnet) => ({
+                ...magnet,
+                x: Math.min(expandShiftBoardX(magnet.x), BOARD_WIDTH - magnet.width),
+              })));
+            const magnets = spreadFourSectionMagnets(expandMagnets(payload.board.magnets));
             const startingMagnets = payload.board.startingMagnets
-              ? compactCurrentMagnetWidths(payload.board.startingMagnets)
+              ? spreadFourSectionMagnets(expandMagnets(payload.board.startingMagnets))
               : undefined;
             const linked = inferNearbyAttachments(magnets);
             void commitBoard({
@@ -471,6 +736,28 @@ export default function Home() {
               layoutVersion: defaultMagneticBoard.layoutVersion,
               magnets: linked.magnets,
               startingMagnets,
+            }, { recordHistory: false });
+            return;
+          }
+          if (payload.board.layoutVersion === 12) {
+            void commitBoard({
+              ...payload.board,
+              layoutVersion: defaultMagneticBoard.layoutVersion,
+              magnets: compactCurrentMagnetWidths(spreadFourSectionMagnets(payload.board.magnets)),
+              startingMagnets: payload.board.startingMagnets
+                ? compactCurrentMagnetWidths(spreadFourSectionMagnets(payload.board.startingMagnets))
+                : undefined,
+            }, { recordHistory: false });
+            return;
+          }
+          if (payload.board.layoutVersion === 13) {
+            void commitBoard({
+              ...payload.board,
+              layoutVersion: defaultMagneticBoard.layoutVersion,
+              magnets: compactCurrentMagnetWidths(payload.board.magnets),
+              startingMagnets: payload.board.startingMagnets
+                ? compactCurrentMagnetWidths(payload.board.startingMagnets)
+                : undefined,
             }, { recordHistory: false });
             return;
           }
@@ -544,30 +831,117 @@ export default function Home() {
     });
   }, [commitBoard]);
 
+  const clearPersonnel = useCallback(() => {
+    const current = stateRef.current;
+    const personnelCount = current.magnets.filter((magnet) => magnet.kind === "person").length;
+    if (!personnelCount) {
+      window.alert("There are no personnel magnets on the board.");
+      return;
+    }
+    if (!window.confirm(`Remove all ${personnelCount} personnel magnets? Assets, locations and notes will stay in place.`)) return;
+    setSelectedId(null);
+    void commitBoard({
+      ...current,
+      magnets: current.magnets.filter((magnet) => magnet.kind !== "person"),
+    });
+  }, [commitBoard]);
+
+  const cleanUpTrucks = useCallback(() => {
+    const current = stateRef.current;
+    if (!window.confirm("Display the complete truck fleet on both Day and Night shift and arrange the trucks into clean vertical stacks?")) return;
+    setSelectedId(null);
+    void commitBoard({
+      ...current,
+      magnets: cleanUpTruckMagnets(current.magnets, current.workSectionCount ?? 4),
+    });
+  }, [commitBoard]);
+
+  const resetAuxiliaryToMiddle = useCallback(() => {
+    const current = stateRef.current;
+    if (!window.confirm("Reset all auxiliary equipment into two columns in the upper-middle of each shift? Excavators and light vehicles will stay where they are.")) return;
+    setSelectedId(null);
+    void commitBoard({
+      ...current,
+      magnets: resetAuxiliaryMagnetsToMiddle(current.magnets),
+    });
+  }, [commitBoard]);
+
+  const toggleFifthSection = useCallback(() => {
+    const current = stateRef.current;
+    const workSectionCount = (current.workSectionCount ?? 4) === 4 ? 5 : 4;
+    const remap = workSectionCount === 4 ? spreadFourSectionMagnets : compactFiveSectionMagnets;
+    void commitBoard({
+      ...current,
+      workSectionCount,
+      magnets: remap(current.magnets),
+    });
+  }, [commitBoard]);
+
   const copyShift = useCallback((source: ShiftSide) => {
     const destination: ShiftSide = source === "day" ? "night" : "day";
     if (!window.confirm(`Replace the ${destination} work area with a copy of the ${source} work area?`)) return;
     const current = stateRef.current;
-    const sourceLeft = source === "day" ? 0 : 866;
-    const destinationLeft = destination === "day" ? 0 : 866;
+    const sourceLeft = source === "day" ? 0 : SHIFT_WIDTH;
+    const destinationLeft = destination === "day" ? 0 : SHIFT_WIDTH;
     const inSide = (magnet: Magnet, left: number) =>
-      magnet.x >= left && magnet.x < left + 866 &&
+      magnet.x >= left && magnet.x < left + SHIFT_WIDTH &&
       magnet.y >= WORK_ROWS_TOP && magnet.y < PARK_UP_TOP;
     const sourceMagnets = current.magnets.filter((magnet) => inSide(magnet, sourceLeft));
     const idMap = new Map(sourceMagnets.map((magnet, index) => [
       magnet.id,
       `copy-${destination}-${Date.now()}-${index}`,
     ]));
+    const maxZ = Math.max(1, ...current.magnets.map((item) => item.z));
     const copiedMagnets = sourceMagnets.map((magnet, index) => ({
       ...magnet,
       id: idMap.get(magnet.id) as string,
       x: magnet.x + destinationLeft - sourceLeft,
-      z: Math.max(1, ...current.magnets.map((item) => item.z)) + index + 1,
+      z: maxZ + index + 1,
       attachedTo: magnet.attachedTo ? idMap.get(magnet.attachedTo) : undefined,
     }));
     const retained = current.magnets.filter((magnet) => !inSide(magnet, destinationLeft));
     void commitBoard({ ...current, magnets: [...retained, ...copiedMagnets] });
     setCopyDialogOpen(false);
+  }, [commitBoard]);
+
+  const allocateCrew = useCallback((crew: CrewCode, side: ShiftSide) => {
+    const sideLabel = side === "day" ? "DAY" : "NIGHT";
+    if (!window.confirm(`Place all ${crew} Crew magnets down the right side of ${sideLabel} shift? Only the crew currently on ${sideLabel} shift will be replaced.`)) return;
+    const current = stateRef.current;
+    const left = side === "day" ? 0 : SHIFT_WIDTH;
+    const right = left + SHIFT_WIDTH;
+    const isOnTargetSide = (magnet: Magnet) => magnet.x >= left && magnet.x < right;
+    const retained = current.magnets.filter((magnet) =>
+      !(magnet.kind === "person" && magnet.crew && isOnTargetSide(magnet)),
+    );
+    const highestZ = Math.max(1, ...retained.map((magnet) => magnet.z));
+    const crewRowSpacing = 22;
+    const rowsPerColumn = Math.floor((PARK_UP_TOP - WORK_ROWS_TOP - 8) / crewRowSpacing);
+    const placed: Magnet[] = crewRosters[crew].map((template, index) => {
+      const column = Math.floor(index / rowsPerColumn);
+      const row = index % rowsPerColumn;
+      return {
+        ...template,
+        id: `crew-${side}-${crew.toLowerCase()}-${(template.fullName ?? template.primary).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        x: right - 8 - template.width - column * 118,
+        y: WORK_ROWS_TOP + 4 + row * crewRowSpacing,
+        z: highestZ + index + 1,
+      };
+    });
+
+    const oppositeLeft = side === "day" ? SHIFT_WIDTH : 0;
+    const oppositeCrew = current.magnets.find((magnet) =>
+      magnet.kind === "person" && magnet.crew && magnet.x >= oppositeLeft && magnet.x < oppositeLeft + SHIFT_WIDTH,
+    )?.crew;
+    const dayCrew = side === "day" ? crew : oppositeCrew;
+    const nightCrew = side === "night" ? crew : oppositeCrew;
+    setCrewDialogOpen(false);
+    setSelectedId(placed[0]?.id ?? null);
+    void commitBoard({
+      ...current,
+      roster: `DAY: ${dayCrew ? `${dayCrew} CREW` : "NOT SET"} · NIGHT: ${nightCrew ? `${nightCrew} CREW` : "NOT SET"}`,
+      magnets: [...retained, ...placed],
+    }, { movedId: placed[0]?.id });
   }, [commitBoard]);
 
   const toggleFullscreen = useCallback(async () => {
@@ -611,8 +985,8 @@ export default function Home() {
   };
 
   useEffect(() => {
-    editorOpenRef.current = Boolean(editorMagnet || shiftEditorOpen || copyDialogOpen);
-  }, [copyDialogOpen, editorMagnet, shiftEditorOpen]);
+    editorOpenRef.current = Boolean(editorMagnet || shiftEditorOpen || copyDialogOpen || crewDialogOpen);
+  }, [copyDialogOpen, crewDialogOpen, editorMagnet, shiftEditorOpen]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -694,6 +1068,7 @@ export default function Home() {
       offsetY: (event.clientY - rect.top) * scaleY - magnet.y,
       historyBase: cloneBoard(stateRef.current),
     };
+    setInvalidDropId(null);
     setSelectedId(magnet.id);
 
     const maxZ = Math.max(1, ...stateRef.current.magnets.map((item) => item.z));
@@ -730,8 +1105,12 @@ export default function Home() {
       drag.id,
       snapValue(rawX, snapToGrid),
       snapValue(rawY, snapToGrid),
+      true,
     );
-    if (moved) updateBoard({ ...current, magnets: moved });
+    if (moved) {
+      setInvalidDropId(linkedGroupOverlaps(moved, drag.id) ? drag.id : null);
+      updateBoard({ ...current, magnets: moved });
+    }
   };
 
   const finishDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -741,10 +1120,22 @@ export default function Home() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    const dragged = stateRef.current.magnets.find((magnet) => magnet.id === draggedId);
+    const currentMagnets = stateRef.current.magnets;
+    const snappedMagnets = snapGroupToParkUpZone(currentMagnets, draggedId);
+    let dropMagnets = snappedMagnets ?? currentMagnets;
+    if (linkedGroupOverlaps(dropMagnets, draggedId)) {
+      dropMagnets = moveGroupToNearestOpenPosition(currentMagnets, draggedId) ?? [];
+    }
+    if (!dropMagnets.length || linkedGroupOverlaps(dropMagnets, draggedId)) {
+      setInvalidDropId(null);
+      updateBoard(cloneBoard(historyBase));
+      return;
+    }
+    setInvalidDropId(null);
+    const dragged = dropMagnets.find((magnet) => magnet.id === draggedId);
     const magnets = dragged?.kind === "person"
-      ? attachPersonToNearestEquipment(stateRef.current.magnets, draggedId)
-      : stateRef.current.magnets;
+      ? attachPersonToNearestEquipment(dropMagnets, draggedId)
+      : dropMagnets;
     void commitBoard(
       { ...stateRef.current, magnets },
       { historyBase, movedId: draggedId },
@@ -836,7 +1227,7 @@ export default function Home() {
   };
 
   return (
-    <main className={presentation ? "app presentation" : "app"}>
+    <main className={presentation ? `app presentation${tvShiftView === "both" ? "" : " presentation-single"}` : "app"}>
       {!presentation && (
         <header className="control-bar">
           <div className="control-brand">
@@ -944,6 +1335,13 @@ export default function Home() {
           </button>
           <span className="status-chip">PARKED {totalParked}</span>
           <button className="quick-button" type="button" onClick={() => setShiftEditorOpen(true)} disabled={locked}>SHIFT / NOTE</button>
+          <button className="quick-button crew-button" type="button" onClick={() => setCrewDialogOpen(true)} disabled={locked}>ALLOCATE CREW</button>
+          <button className="quick-button clear-personnel-button" type="button" onClick={clearPersonnel} disabled={locked}>CLEAR PERSONNEL</button>
+          <button className="quick-button cleanup-trucks-button" type="button" onClick={cleanUpTrucks} disabled={locked}>CLEAN UP TRUCKS</button>
+          <button className="quick-button cleanup-aux-button" type="button" onClick={resetAuxiliaryToMiddle} disabled={locked}>RESET AUX LAYOUT</button>
+          <button className="quick-button" type="button" onClick={toggleFifthSection} disabled={locked}>
+            {(board.workSectionCount ?? 4) === 4 ? "+ 5TH SECTION" : "− 5TH SECTION"}
+          </button>
           <button className="quick-button" type="button" onClick={saveStartingLayout} disabled={locked}>SAVE START</button>
           <button className="quick-button" type="button" onClick={() => setCopyDialogOpen(true)} disabled={locked}>COPY SHIFT</button>
           <button className="quick-button" type="button" onClick={toggleFullscreen}>{isFullscreen ? "EXIT FULL SCREEN" : "FULL SCREEN"}</button>
@@ -975,18 +1373,52 @@ export default function Home() {
                   event.dataTransfer.setData("application/x-shiftboard-template", JSON.stringify(template));
                 }}
                 onClick={() => addInventoryMagnet(template)}
-              ><strong>{template.primary}</strong></button>
+              ><strong>{template.kind === "person" && template.crew ? template.primary.split(" ")[0] : template.primary}</strong></button>
             ))}
           </div>
         </section>
       )}
 
       <div className="board-scroll">
+        {presentation && tvShiftView !== "both" && (
+          <div
+            className="tv-full-header"
+            style={{ width: BOARD_WIDTH * tvHeaderScale, height: TV_SHARED_HEADER_HEIGHT * tvHeaderScale }}
+          >
+            <div
+              className="magnet-canvas canvas-locked"
+              style={{
+                width: BOARD_WIDTH,
+                height: BOARD_HEIGHT,
+                transform: `scale(${tvHeaderScale})`,
+              }}
+            >
+              <BoardBackground truckStats={truckStats} parkUpCounts={parkUpCounts} board={board} />
+              {board.magnets.filter((item) => item.y < TV_SHARED_HEADER_HEIGHT).map((item) => (
+                <button
+                  key={`tv-header-${item.id}`}
+                  type="button"
+                  className={`magnet magnet-${item.kind} tone-${item.tone}`}
+                  style={{ left: item.x, top: item.y, width: item.width, height: item.height, zIndex: item.z + 10 }}
+                  tabIndex={-1}
+                >
+                  <MagnetContent magnet={item} />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div
           className="board-stage"
           style={{
-            width: presentation ? BOARD_WIDTH * tvScale : BOARD_WIDTH,
-            height: presentation ? BOARD_HEIGHT * tvScale : BOARD_HEIGHT,
+            width: presentation
+              ? (tvShiftView === "both" ? BOARD_WIDTH : SHIFT_WIDTH) * tvScale
+              : BOARD_WIDTH,
+            height: presentation
+              ? (tvShiftView === "both" ? BOARD_HEIGHT * tvScaleY : (PARK_UP_TOP - TV_SHARED_HEADER_HEIGHT) * tvScaleY)
+              : BOARD_HEIGHT,
+            overflow: presentation && tvShiftView !== "both" ? "hidden" : undefined,
+            marginTop: presentation && tvShiftView !== "both" ? TV_SHARED_HEADER_HEIGHT * tvHeaderScale : undefined,
           }}
         >
           <div
@@ -995,8 +1427,11 @@ export default function Home() {
             style={{
               width: BOARD_WIDTH,
               height: BOARD_HEIGHT,
-              transform: presentation ? `scale(${tvScale})` : undefined,
-            }}
+              transform: presentation
+                ? `scale(${tvScale}, ${tvScaleY}) translate(${tvShiftView === "night" ? -SHIFT_WIDTH : 0}px, ${tvShiftView === "both" ? 0 : -TV_SHARED_HEADER_HEIGHT}px)`
+                : undefined,
+              "--tv-counter-scale": presentation && tvShiftView !== "both" ? tvScaleY / tvScale : 1,
+            } as CSSProperties}
             onDragOver={(event) => event.preventDefault()}
             onDrop={dropFromRack}
             onPointerDown={(event) => {
@@ -1009,7 +1444,7 @@ export default function Home() {
               <button
                 key={item.id}
                 type="button"
-                className={`magnet magnet-${item.kind} tone-${item.tone}${selectedId === item.id ? " magnet-selected" : ""}${item.attachedTo || board.magnets.some((magnet) => magnet.attachedTo === item.id) ? " magnet-linked" : ""}${board.lastMovedId === item.id ? " magnet-last-moved" : ""}`}
+                className={`magnet magnet-${item.kind} tone-${item.tone}${selectedId === item.id ? " magnet-selected" : ""}${invalidDropId === item.id ? " magnet-drop-invalid" : ""}${linkedMagnetIds.has(item.id) ? " magnet-linked" : ""}${board.lastMovedId === item.id ? " magnet-last-moved" : ""}`}
                 data-magnet-id={item.id}
                 style={{
                   left: item.x,
@@ -1017,8 +1452,13 @@ export default function Home() {
                   width: item.width,
                   height: item.height,
                   zIndex: item.z + 10,
+                  transform: presentation && tvShiftView !== "both"
+                    ? `scaleX(${tvScaleY / tvScale})`
+                    : undefined,
+                  transformOrigin: "left center",
                 }}
-                aria-label={`${item.primary}${item.secondary ? `, ${item.secondary}` : ""}`}
+                aria-label={`${item.fullName ?? item.primary}${item.crew ? `, ${item.crew} Crew` : ""}${item.competencies?.length ? `, passed out in ${item.competencies.join(", ")}` : ""}`}
+                title={item.kind === "person" ? [item.fullName, item.competencies?.length ? `Passed out in: ${item.competencies.join(", ")}` : "Competencies not yet recorded"].filter(Boolean).join(" · ") : undefined}
                 onPointerDown={(event) => handlePointerDown(event, item)}
                 onPointerMove={handlePointerMove}
                 onPointerUp={finishDrag}
@@ -1033,9 +1473,23 @@ export default function Home() {
       </div>
 
       {presentation && (
-        <button className="exit-tv" type="button" onClick={() => setPresentation(false)}>
-          EXIT TV VIEW
-        </button>
+        <div className="tv-controls" aria-label="TV view controls">
+          <div className="tv-shift-selector" role="group" aria-label="Displayed shift">
+            {(["both", "day", "night"] as TvShiftView[]).map((view) => (
+              <button
+                key={view}
+                className={tvShiftView === view ? "active" : ""}
+                type="button"
+                onClick={() => setTvShiftView(view)}
+              >
+                {view === "both" ? "BOTH" : view === "day" ? "DAYS" : "NIGHTS"}
+              </button>
+            ))}
+          </div>
+          <button className="exit-tv" type="button" onClick={() => setPresentation(false)}>
+            EXIT TV VIEW
+          </button>
+        </div>
       )}
 
       {editorMagnet && (
@@ -1075,6 +1529,18 @@ export default function Home() {
           ]}
         />
       )}
+
+      {crewDialogOpen && (
+        <ChoiceModal
+          title="QUICK CREW ALLOCATION"
+          message="Choose a crew and shift. Imported crew magnets are placed into free positions on that side of the whiteboard, ready to drag onto equipment."
+          onClose={() => setCrewDialogOpen(false)}
+          choices={(["A", "B", "C"] as CrewCode[]).flatMap((crew) => ([
+            { label: `${crew} CREW → DAYS`, onClick: () => allocateCrew(crew, "day") },
+            { label: `${crew} CREW → NIGHTS`, onClick: () => allocateCrew(crew, "night") },
+          ]))}
+        />
+      )}
     </main>
   );
 }
@@ -1083,16 +1549,16 @@ function MagnetContent({ magnet }: { magnet: Magnet }) {
   if (magnet.kind === "location") {
     return (
       <>
-        <strong>{magnet.primary}</strong>
+        <strong>{magnet.crew ? magnet.primary.split(" ")[0] : magnet.primary}</strong>
         {magnet.secondary && <span>{magnet.secondary}</span>}
       </>
     );
   }
 
-  if (magnet.kind === "person" && magnet.secondary) {
+  if (magnet.kind === "person") {
     return (
       <>
-        <small>{magnet.secondary}</small>
+        {magnet.secondary && <small>{magnet.secondary}</small>}
         <strong>{magnet.primary}</strong>
       </>
     );
@@ -1141,23 +1607,17 @@ function BoardBackground({
         <strong>NIGHT SHIFT</strong>
         <span>TEAM LEADERS</span>
       </section>
-      <aside className="fixed-rr-heading">
-        <strong>R + R</strong>
-        <span>11</span>
-      </aside>
-
       <div className="column-heading day-columns">
-        <span>PIT / WORK AREA</span><span>ASSET / SUPERVISOR</span><span>TRUCKS / OPERATORS</span>
+        <span>PIT / WORK AREA</span><span>ASSET </span><span>TRUCKS / OPERATORS</span>
       </div>
       <div className="column-heading night-columns">
-        <span>PIT / WORK AREA</span><span>ASSET / SUPERVISOR</span><span>TRUCKS / OPERATORS</span>
+        <span>PIT / WORK AREA</span><span>ASSET </span><span>TRUCKS / OPERATORS</span>
       </div>
 
-      <div className="fixed-work-grid day-work-grid" />
-      <div className="fixed-work-grid night-work-grid" />
-      <FloorPickupGaps side="day" />
-      <FloorPickupGaps side="night" />
-      <div className="fixed-rr-grid" />
+      <div className={`fixed-work-grid day-work-grid work-sections-${board.workSectionCount ?? 4}`} />
+      <div className={`fixed-work-grid night-work-grid work-sections-${board.workSectionCount ?? 4}`} />
+      <FloorPickupGaps side="day" sectionCount={board.workSectionCount ?? 4} />
+      <FloorPickupGaps side="night" sectionCount={board.workSectionCount ?? 4} />
 
       <BoardBands parkUpCounts={parkUpCounts} />
 
@@ -1169,10 +1629,10 @@ function BoardBackground({
   );
 }
 
-function FloorPickupGaps({ side }: { side: "day" | "night" }) {
+function FloorPickupGaps({ side, sectionCount }: { side: "day" | "night"; sectionCount: 4 | 5 }) {
   return (
-    <div className={`floor-pickup-gaps ${side}-floor-pickup-gaps`}>
-      {Array.from({ length: 5 }, (_, index) => (
+    <div className={`floor-pickup-gaps ${side}-floor-pickup-gaps work-sections-${sectionCount}`}>
+      {Array.from({ length: sectionCount }, (_, index) => (
         <div className="floor-pickup-row" key={index}>
           <span>END-OF-SHIFT FLOOR PARK-UP · LV PICKUP</span>
         </div>
@@ -1345,6 +1805,27 @@ function MagnetEditor({
               SECOND LINE / OPERATOR
               <input value={draft.secondary ?? ""} onChange={(event) => setDraft({ ...draft, secondary: event.target.value })} />
             </label>
+            {draft.kind === "person" && (
+              <>
+                <label>
+                  CREW
+                  <select value={draft.crew ?? ""} onChange={(event) => setDraft({ ...draft, crew: (event.target.value || undefined) as CrewCode | undefined })}>
+                    <option value="">NOT SET</option>
+                    <option value="A">A CREW</option>
+                    <option value="B">B CREW</option>
+                    <option value="C">C CREW</option>
+                  </select>
+                </label>
+                <label className="editor-wide">
+                  PASSED OUT IN / COMPETENCIES
+                  <input
+                    placeholder="E.G. HAUL TRUCK 777, DOZER, WATER CART"
+                    value={draft.competencies?.join(", ") ?? ""}
+                    onChange={(event) => setDraft({ ...draft, competencies: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) })}
+                  />
+                </label>
+              </>
+            )}
             <label>
               WIDTH
               <input type="number" min="36" max="600" value={draft.width} onChange={(event) => setDraft({ ...draft, width: Number(event.target.value) })} />
