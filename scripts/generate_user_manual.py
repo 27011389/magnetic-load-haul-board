@@ -10,14 +10,16 @@ from docx.shared import Inches, Pt, RGBColor
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "docs" / "Magnetic_Shiftboard_User_Manual.docx"
+REFERENCE_DOCX = Path(r"C:\Users\mark.pepere\Downloads\Lightning and Storm Events Procedure_V2.docx")
+OUT = ROOT / "docs" / "Magnetic_Shiftboard_User_Manual_Company_Standard.docx"
 LOGO = ROOT / "public" / "ConsminLogo.png"
 MANUAL_ASSETS = ROOT / "docs" / "manual-assets"
 
 INK = "17241F"
 GREEN = "526F43"
+CONSMIN_RED = "C8102E"
 LIME = "D8FA4C"
-PALE = "EEF3E0"
+PALE = "F7E8EA"
 LIGHT = "F2F4F1"
 MID = "68736F"
 RED = "B9473E"
@@ -104,9 +106,9 @@ def set_table_geometry(table, widths):
 
 
 def set_font(run, size=11, bold=False, color=INK, italic=False):
-    run.font.name = "Calibri"
-    run._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), "Calibri")
-    run._element.get_or_add_rPr().rFonts.set(qn("w:hAnsi"), "Calibri")
+    run.font.name = "Arial"
+    run._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), "Arial")
+    run._element.get_or_add_rPr().rFonts.set(qn("w:hAnsi"), "Arial")
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
@@ -114,8 +116,8 @@ def set_font(run, size=11, bold=False, color=INK, italic=False):
 
 
 def add_page_number(paragraph):
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run = paragraph.add_run("Page ")
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = paragraph.add_run("REV: 1 - August 2026     UNCONTROLLED once printed. Refer to BMS for latest version     Page ")
     set_font(run, 9, color=MID)
     fld = OxmlElement("w:fldSimple")
     fld.set(qn("w:instr"), "PAGE")
@@ -142,27 +144,55 @@ def add_figure(path, width, caption, explanation, alt_text):
     set_font(ep.add_run(explanation), 9, False, MID, True)
 
 
-doc = Document()
+doc = Document(REFERENCE_DOCX)
+
+# Retain the source template package, section settings, styles, headers, footers,
+# drawings, fields, and relationships. Remove only the source procedure body.
+body = doc._element.body
+for child in list(body):
+    if child.tag != qn("w:sectPr"):
+        body.remove(child)
+
 section = doc.sections[0]
-section.top_margin = Inches(0.75)
-section.bottom_margin = Inches(0.75)
-section.left_margin = Inches(1.0)
-section.right_margin = Inches(1.0)
-section.header_distance = Inches(0.35)
-section.footer_distance = Inches(0.35)
+
+def replace_part_text(part, replacements):
+    for node in part._element.xpath(".//w:t"):
+        if node.text in replacements:
+            node.text = replacements[node.text]
+
+
+replace_part_text(section.header, {
+    "Health Safety and Training": "Mining Operations",
+    "Lightning and Storm Events Procedure": "Load and Haul Shiftboard User Manual",
+})
+replace_part_text(section.first_page_header, {
+    "Health Safety and Training": "Mining Operations",
+    "Lightning and Storm Events ": "Load and Haul Shiftboard ",
+    "Procedure": "User Manual",
+})
+
+
+for footer in (section.footer, section.first_page_footer):
+    replace_part_text(footer, {
+        "HST-PRO-0030": "TBC",
+        "6": "Draft 1",
+        "Jan-26": "Aug-26",
+        "Senior Advisor Health, Safety and Training": "Mark Pepere",
+        "Health, Safety and Training Superintendent": "Pending",
+    })
 
 styles = doc.styles
 normal = styles["Normal"]
-normal.font.name = "Calibri"
-normal.font.size = Pt(11)
+normal.font.name = "Arial"
+normal.font.size = Pt(10.5)
 normal.font.color.rgb = RGBColor.from_string(INK)
 normal.paragraph_format.space_after = Pt(6)
 normal.paragraph_format.line_spacing = 1.25
 
 for name, size, color, before, after in (
-    ("Heading 1", 16, GREEN, 18, 10),
-    ("Heading 2", 13, GREEN, 14, 7),
-    ("Heading 3", 12, INK, 10, 5),
+    ("ConsMin Heading 1", 12, INK, 18, 6),
+    ("ConsMin Heading 2", 11, INK, 12, 6),
+    ("Heading 3", 10.5, INK, 10, 5),
 ):
     style = styles[name]
     style.font.name = "Calibri"
@@ -182,27 +212,18 @@ for list_name in ("List Bullet", "List Number"):
     style.paragraph_format.space_after = Pt(4)
     style.paragraph_format.line_spacing = 1.25
 
-header = section.header
-hp = header.paragraphs[0]
-hp.alignment = WD_ALIGN_PARAGRAPH.LEFT
-run = hp.add_run("MAGNETIC LOAD & HAUL SHIFTBOARD  |  USER MANUAL")
-set_font(run, 8.5, True, MID)
-footer = section.footer
-add_page_number(footer.paragraphs[0])
+def add_company_heading(text, level=1):
+    style = "ConsMin Heading 1" if level == 1 else "ConsMin Heading 2" if level == 2 else "Heading 3"
+    return doc.add_paragraph(text, style=style)
 
-# Editorial cover pattern.
-if LOGO.exists():
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_after = Pt(38)
-    picture = p.add_run().add_picture(str(LOGO), width=Inches(2.5))
-    picture._inline.docPr.set("title", "ConsMin logo")
-    picture._inline.docPr.set("descr", "ConsMin company logo")
+
+doc.add_heading = add_company_heading
 
 p = doc.add_paragraph()
 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+p.paragraph_format.space_before = Pt(40)
 p.paragraph_format.space_after = Pt(12)
-r = p.add_run("OPERATOR REFERENCE GUIDE")
+r = p.add_run("Operator Reference Guide")
 set_font(r, 10, True, GREEN)
 
 p = doc.add_paragraph()
@@ -221,7 +242,7 @@ table = doc.add_table(rows=1, cols=2)
 set_table_geometry(table, [2700, 6660])
 set_table_borders(table, "D7DDD8")
 for idx, label in enumerate(("Document", "Details")):
-    shade(table.rows[0].cells[idx], GREEN)
+    shade(table.rows[0].cells[idx], CONSMIN_RED)
     set_font(table.rows[0].cells[idx].paragraphs[0].add_run(label), 10, True, WHITE)
 set_repeat_table_header(table.rows[0])
 metadata = [
@@ -233,7 +254,7 @@ metadata = [
 for label, value in metadata:
     row = table.add_row()
     shade(row.cells[0], PALE)
-    set_font(row.cells[0].paragraphs[0].add_run(label), 10, True, GREEN)
+    set_font(row.cells[0].paragraphs[0].add_run(label), 10, True, CONSMIN_RED)
     set_font(row.cells[1].paragraphs[0].add_run(value), 10, False, INK)
     for cell in row.cells:
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
@@ -255,6 +276,7 @@ contents = [
     "8. Pit allocation and operator linking", "9. Park-up and status lanes",
     "10. Board controls and display modes", "11. Shift handover procedure",
     "12. Troubleshooting", "13. Quick-reference checklists",
+    "14. Terms and definitions",
 ]
 for item in contents:
     doc.add_paragraph(item, style="List Number")
@@ -269,7 +291,7 @@ for text in [
     "Check the LIVE BOARD/SAVING indicator before leaving the screen.",
     "Use Undo immediately if a bulk action produces an unintended result.",
 ]:
-    doc.add_paragraph(text, style="List Bullet")
+    doc.add_paragraph(text, style="List Number")
 
 doc.add_heading("2. Mine 2, Mine 3 and Control operating model", level=1)
 doc.add_paragraph("The software presents the same shared board to every screen and does not enforce user roles. The responsibilities below are the recommended operating model: Control is the single editing authority, while Mine 2 and Mine 3 verify and consume the board for their areas. Access controls should support this model where practical.")
@@ -282,7 +304,7 @@ table = doc.add_table(rows=1, cols=3)
 set_table_geometry(table, [1600, 2400, 5360])
 set_table_borders(table)
 for idx, label in enumerate(("Point", "Primary purpose", "Expected actions")):
-    shade(table.rows[0].cells[idx], GREEN)
+    shade(table.rows[0].cells[idx], CONSMIN_RED)
     set_font(table.rows[0].cells[idx].paragraphs[0].add_run(label), 10, True, WHITE)
 set_repeat_table_header(table.rows[0])
 for point, purpose, actions in roles:
@@ -369,7 +391,7 @@ set_table_borders(table)
 table.rows[0].cells[0].text = "Lane"
 table.rows[0].cells[1].text = "Use"
 for cell in table.rows[0].cells:
-    shade(cell, GREEN)
+    shade(cell, CONSMIN_RED)
     for run in cell.paragraphs[0].runs:
         set_font(run, 10, True, WHITE)
 set_repeat_table_header(table.rows[0])
@@ -448,7 +470,7 @@ table = doc.add_table(rows=1, cols=2)
 set_table_geometry(table, [4680, 4680])
 set_table_borders(table)
 for idx, label in enumerate(("Left column", "Right column")):
-    shade(table.rows[0].cells[idx], GREEN)
+    shade(table.rows[0].cells[idx], CONSMIN_RED)
     set_font(table.rows[0].cells[idx].paragraphs[0].add_run(label), 10, True, WHITE)
 set_repeat_table_header(table.rows[0])
 row = table.add_row().cells
@@ -517,7 +539,7 @@ add_figure(
 )
 set_table_borders(table)
 for idx, label in enumerate(("Control", "Purpose")):
-    shade(table.rows[0].cells[idx], GREEN)
+    shade(table.rows[0].cells[idx], CONSMIN_RED)
     set_font(table.rows[0].cells[idx].paragraphs[0].add_run(label), 10, True, WHITE)
 set_repeat_table_header(table.rows[0])
 for label, detail in controls:
@@ -554,7 +576,7 @@ table = doc.add_table(rows=1, cols=2)
 set_table_geometry(table, [3000, 6360])
 set_table_borders(table)
 for idx, label in enumerate(("Symptom", "Action")):
-    shade(table.rows[0].cells[idx], GREEN)
+    shade(table.rows[0].cells[idx], CONSMIN_RED)
     set_font(table.rows[0].cells[idx].paragraphs[0].add_run(label), 10, True, WHITE)
 set_repeat_table_header(table.rows[0])
 for issue, action in issues:
@@ -577,10 +599,63 @@ for text in ["Correct shift view selected", "Relevant pits and fleet checked", "
 doc.add_heading("Support information", level=1)
 doc.add_paragraph("When reporting a problem, record the date and time, shift, browser/device, status indicator, action attempted and affected magnet names. Include a screenshot where possible. Do not repeatedly refresh while SAVING or RETRYING without first recording the board state.")
 
+doc.add_heading("14. Terms and definitions", level=1)
+terms = [
+    ("CMA", "ConsMin Australia"),
+    ("Control", "The authorised operational point responsible for editing and publishing the live board"),
+    ("D1", "The SQLite-compatible database used to store the shared board state"),
+    ("Live Board", "The status displayed when the application has loaded and no save is pending"),
+    ("Magnet", "A movable board item representing a person, asset, location, status, or note"),
+    ("TV View", "A fitted display mode intended for read-only operational viewing"),
+]
+table = doc.add_table(rows=1, cols=2)
+set_table_geometry(table, [2400, 6960])
+set_table_borders(table)
+for idx, label in enumerate(("Term", "Definition")):
+    shade(table.rows[0].cells[idx], CONSMIN_RED)
+    set_font(table.rows[0].cells[idx].paragraphs[0].add_run(label), 10, True, WHITE)
+set_repeat_table_header(table.rows[0])
+for term, definition in terms:
+    cells = table.add_row().cells
+    set_font(cells[0].paragraphs[0].add_run(term), 9.5, True)
+    set_font(cells[1].paragraphs[0].add_run(definition), 9.5)
+set_table_geometry(table, [2400, 6960])
+
+# BMS Writer's Guide: list phrases end without punctuation.
+for paragraph in doc.paragraphs:
+    if paragraph.style.name in ("List Bullet", "List Number"):
+        text = paragraph.text.rstrip()
+        if text.endswith((".", ";", ",")):
+            paragraph.text = text[:-1]
+
 OUT.parent.mkdir(parents=True, exist_ok=True)
 doc.core_properties.title = "Magnetic Load & Haul Shiftboard User Manual"
 doc.core_properties.subject = "Operational instructions for the digital load and haul whiteboard"
 doc.core_properties.author = "ConsMin Operations"
 doc.core_properties.keywords = "shiftboard, whiteboard, load and haul, operator manual"
+
+# Preserve the company header artwork while adding accessibility metadata.
+for header_part in (section.header, section.first_page_header):
+    for drawing_properties in header_part._element.xpath(".//wp:docPr"):
+        if not drawing_properties.get("title"):
+            drawing_properties.set("title", "ConsMin document header")
+        if not drawing_properties.get("descr"):
+            drawing_properties.set("descr", "ConsMin company document header artwork")
+
+# Footer control tables are repeated page furniture. Mark their first rows so
+# assistive tools can identify the recurring control notice.
+for footer_part in (section.footer, section.first_page_footer):
+    for footer_table in footer_part.tables:
+        if footer_table.rows:
+            set_repeat_table_header(footer_table.rows[0])
+
+# Ask Microsoft Word to refresh PAGE and NUMPAGES fields when the file opens.
+settings = doc.settings._element
+update_fields = settings.find(qn("w:updateFields"))
+if update_fields is None:
+    update_fields = OxmlElement("w:updateFields")
+    settings.append(update_fields)
+update_fields.set(qn("w:val"), "true")
+
 doc.save(OUT)
 print(OUT)
