@@ -24,8 +24,8 @@ import {
   compactBoardY,
   compactCurrentMagnetWidths,
   compactMagnetHeight,
-  compactFiveSectionMagnets,
   expandShiftBoardX,
+  resizeWorkSections,
   spreadFourSectionMagnets,
   crewRosters,
   responsiveMagnetWidth,
@@ -39,6 +39,7 @@ import {
   type MagnetKind,
   type MagnetTemplate,
   type MagneticBoardState,
+  type WorkSectionCount,
 } from "./board-data";
 
 type SyncState = "loading" | "saving" | "saved" | "error";
@@ -59,6 +60,20 @@ type CommitOptions = {
 
 type ShiftSide = "day" | "night";
 type TvShiftView = "both" | ShiftSide;
+
+type DuplicateTruck = {
+  number: string;
+  side: ShiftSide;
+};
+
+type BoardWarning = {
+  title: string;
+  message: string;
+};
+
+type ConfirmationPrompt = BoardWarning & {
+  confirmLabel: string;
+};
 
 const ATTACH_DISTANCE = 36;
 const ATTACH_GAP = 4;
@@ -93,6 +108,73 @@ const PARK_UP_ROWS = [
 
 // Reserve the printed lane-name area at the start of each bottom zone.
 const PARK_UP_ZONE_LABEL_CLEARANCE = 150;
+const PIT_WORK_AREA_OPTIONS = [
+  "RADIO HILL", "BIG MACK", "CORGAN", "PALO", "CHRIS D PIT", "RHODES ROM",
+  "DIRECT CART", "ORE CARTAGE", "CAMP", "MILL", "TRAINING", "U/S", "D&A",
+  "TRAMMING", "ON LEAVE / SICK",
+];
+const DIGGER_OPTIONS = ["EX25", "EX27", "EX28", "EX29", "EX30", "EX31", "EX32"];
+
+function parseLocationDetails(secondary?: string) {
+  return {
+    rl: secondary?.match(/\bRL\s*([^·|]+?)(?=\s*(?:·|\||SHOT|$))/i)?.[1]?.trim() ?? "",
+    shot: secondary?.match(/\bSHOT\s*(.+)$/i)?.[1]?.trim() ?? "",
+  };
+}
+
+function formatLocationDetails(rl: string, shot: string) {
+  return [rl.trim() ? `RL ${rl.trim()}` : "", shot.trim() ? `SHOT ${shot.trim()}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+const isPitWorkAreaControl = (magnet: Magnet) => {
+  if (magnet.kind !== "location" || magnet.y < WORK_ROWS_TOP || magnet.y >= PARK_UP_TOP) return false;
+  const sideX = magnet.x < SHIFT_WIDTH ? magnet.x : magnet.x - SHIFT_WIDTH;
+  return sideX >= 0 && sideX < 130;
+};
+
+const isDiggerControl = (magnet: Magnet) => {
+  if (magnet.kind !== "excavator" || magnet.y < WORK_ROWS_TOP || magnet.y >= PARK_UP_TOP) return false;
+  const sideX = magnet.x < SHIFT_WIDTH ? magnet.x : magnet.x - SHIFT_WIDTH;
+  return sideX >= 130 && sideX < 252;
+};
+
+function pitWorkAreaPosition(magnet: Magnet, sectionCount: WorkSectionCount, rowIndex: number) {
+  const sideLeft = magnet.x < SHIFT_WIDTH ? 0 : SHIFT_WIDTH;
+  const rowHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / sectionCount;
+  return {
+    left: sideLeft + 8,
+    top: Math.round(WORK_ROWS_TOP + rowIndex * rowHeight + 7),
+    width: 114,
+    height: 39,
+    zIndex: magnet.z + 10,
+  };
+}
+
+function diggerPosition(magnet: Magnet, sectionCount: WorkSectionCount, rowIndex: number) {
+  const sideLeft = magnet.x < SHIFT_WIDTH ? 0 : SHIFT_WIDTH;
+  const rowHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / sectionCount;
+  return {
+    left: sideLeft + 138,
+    top: Math.round(WORK_ROWS_TOP + rowIndex * rowHeight + 7),
+    width: 60,
+    height: 22,
+    zIndex: magnet.z + 10,
+  };
+}
+
+function getDiggerRows(magnets: Magnet[], sectionCount: WorkSectionCount) {
+  const rows = new Map<string, number>();
+  (["day", "night"] as ShiftSide[]).forEach((side) => {
+    magnets
+      .filter((magnet) => isDiggerControl(magnet) && (magnet.x < SHIFT_WIDTH ? "day" : "night") === side)
+      .sort((a, b) => a.y - b.y || a.id.localeCompare(b.id))
+      .slice(0, sectionCount)
+      .forEach((magnet, rowIndex) => rows.set(magnet.id, rowIndex));
+  });
+  return rows;
+}
 
 const cloneBoard = (board: MagneticBoardState): MagneticBoardState => ({
   ...board,
@@ -173,6 +255,41 @@ const clamp = (value: number, min: number, max: number) =>
 
 const snapValue = (value: number, enabled: boolean) =>
   enabled ? Math.round(value / 10) * 10 : Math.round(value);
+
+const personnelRosterKey = (magnet: Pick<Magnet, "crew" | "fullName" | "primary">) =>
+  magnet.crew
+    ? `${magnet.crew}:${(magnet.fullName ?? magnet.primary).trim().toUpperCase()}`
+    : null;
+
+const truckShiftKey = (magnet: Magnet) => {
+  if (
+    magnet.kind !== "truck" ||
+    magnet.x < 0 ||
+    magnet.x >= BOARD_WIDTH ||
+    magnet.y >= PARK_UP_TOP
+  ) return null;
+  const side: ShiftSide = magnet.x < SHIFT_WIDTH ? "day" : "night";
+  return `${side}:${magnet.primary.trim().toUpperCase()}`;
+};
+
+function findNewDuplicateTruck(previous: Magnet[], next: Magnet[]): DuplicateTruck | null {
+  const counts = (magnets: Magnet[]) => {
+    const result = new Map<string, number>();
+    magnets.forEach((magnet) => {
+      const key = truckShiftKey(magnet);
+      if (key) result.set(key, (result.get(key) ?? 0) + 1);
+    });
+    return result;
+  };
+  const previousCounts = counts(previous);
+  for (const [key, count] of counts(next)) {
+    if (count > 1 && count > (previousCounts.get(key) ?? 0)) {
+      const [side, ...numberParts] = key.split(":");
+      return { side: side as ShiftSide, number: numberParts.join(":") };
+    }
+  }
+  return null;
+}
 
 const overlaps = (a: Magnet, b: Magnet) =>
   a.x < b.x + b.width &&
@@ -330,11 +447,10 @@ function findOpenPosition(
   return null;
 }
 
-function cleanUpTruckMagnets(magnets: Magnet[], sectionCount: 4 | 5) {
+function cleanUpTruckMagnets(magnets: Magnet[]) {
   const truckTemplates = magnetInventory.filter((template) => template.kind === "truck");
-  const sectionHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / sectionCount;
-  const existingTrucks = magnets.filter((magnet) => magnet.kind === "truck");
-  const retained = magnets.filter((magnet) => magnet.kind !== "truck");
+  const existingTrucks = magnets.filter((magnet) => magnet.kind === "truck" && magnet.y < PARK_UP_TOP);
+  const retained = magnets.filter((magnet) => magnet.kind !== "truck" || magnet.y >= PARK_UP_TOP);
   const cleanedTrucks: Magnet[] = [];
   const truckPositions = new Map<string, Magnet>();
   let nextZ = Math.max(1, ...magnets.map((magnet) => magnet.z)) + 1;
@@ -343,35 +459,37 @@ function cleanUpTruckMagnets(magnets: Magnet[], sectionCount: 4 | 5) {
     const left = side === "day" ? 0 : SHIFT_WIDTH;
     const sideTrucks = existingTrucks.filter((magnet) => magnet.x >= left && magnet.x < left + SHIFT_WIDTH);
     const byUnit = new Map(sideTrucks.map((magnet) => [magnet.primary.toUpperCase(), magnet]));
-    const groups: Magnet[][] = Array.from({ length: sectionCount }, () => []);
+    const parkedUnits = new Set(
+      retained.filter((magnet) =>
+        magnet.kind === "truck" && magnet.y >= PARK_UP_TOP && magnet.x >= left && magnet.x < left + SHIFT_WIDTH,
+      ).map((magnet) => magnet.primary.toUpperCase()),
+    );
+    const groups: [Magnet[], Magnet[]] = [[], []];
 
     truckTemplates.forEach((template) => {
+      if (parkedUnits.has(template.primary.toUpperCase())) return;
       const existing = byUnit.get(template.primary.toUpperCase());
       const magnet: Magnet = existing ?? {
         ...template,
         id: `fleet-${side}-${template.primary.toLowerCase()}`,
-        x: left + 270,
+        x: left + 520,
         y: WORK_ROWS_TOP,
         z: nextZ++,
       };
-      if (existing) {
-        const row = Math.max(0, Math.min(sectionCount - 1, Math.floor((existing.y - WORK_ROWS_TOP) / sectionHeight)));
-        groups[row].push(magnet);
-      } else {
-        const smallestGroup = groups.reduce((best, group) => group.length < best.length ? group : best, groups[0]);
-        smallestGroup.push(magnet);
-      }
+      const unitNumber = template.primary.replace(/^DT/i, "");
+      const fleetColumn = unitNumber.length <= 2 ? 0 : 1;
+      groups[fleetColumn].push(magnet);
     });
 
-    groups.forEach((group, row) => {
+    // Continuous fleet lanes sit to the right of the dashed divider: 777
+    // trucks, 789 trucks, AUX, then the two personnel columns.
+    groups.forEach((group, column) => {
       group.sort((a, b) => a.primary.localeCompare(b.primary, undefined, { numeric: true }));
       group.forEach((magnet, index) => {
-        const stackRow = index % 4;
-        const column = Math.floor(index / 4);
         const positioned = {
           ...magnet,
-          x: left + 270 + column * 145,
-          y: Math.round(WORK_ROWS_TOP + row * sectionHeight + 68 + stackRow * 22),
+          x: left + 520 + column * 70,
+          y: WORK_ROWS_TOP + 4 + index * 22,
           height: 20,
           z: nextZ++,
         };
@@ -415,42 +533,51 @@ function resetAuxiliaryMagnetsToMiddle(magnets: Magnet[]) {
     (template.kind === "support" && template.primary === "WD001"),
   );
   const existingAux = magnets.filter(isAuxiliaryMagnet);
-  const existingAuxIds = new Set(existingAux.map((magnet) => magnet.id));
-  const retained = magnets.filter((magnet) => !isAuxiliaryMagnet(magnet));
+  const resettableAux = existingAux.filter((magnet) => magnet.y < PARK_UP_TOP);
+  const resettableAuxIds = new Set(resettableAux.map((magnet) => magnet.id));
+  const retained = magnets.filter((magnet) =>
+    !isAuxiliaryMagnet(magnet) || magnet.y >= PARK_UP_TOP,
+  );
   const cleanedAux: Magnet[] = [];
   const auxPositions = new Map<string, Magnet>();
   let nextZ = Math.max(1, ...magnets.map((magnet) => magnet.z)) + 1;
 
   (["day", "night"] as ShiftSide[]).forEach((side) => {
     const left = side === "day" ? 0 : SHIFT_WIDTH;
-    const sideAux = existingAux.filter((magnet) => magnet.x >= left && magnet.x < left + SHIFT_WIDTH);
+    const isOnSide = (magnet: Magnet) => magnet.x >= left && magnet.x < left + SHIFT_WIDTH;
+    const sideAux = resettableAux.filter(isOnSide);
+    const parkedUnits = new Set(
+      existingAux.filter((magnet) => isOnSide(magnet) && magnet.y >= PARK_UP_TOP)
+        .map((magnet) => canonicalAuxUnit(magnet.primary)),
+    );
     const byUnit = new Map(sideAux.map((magnet) => [canonicalAuxUnit(magnet.primary), magnet]));
-    const sideMagnets = auxiliaryTemplates.map((template) => {
+    const sideMagnets = auxiliaryTemplates.flatMap((template) => {
+      if (parkedUnits.has(template.primary)) return [];
       const existing = byUnit.get(template.primary);
-      return existing ? { ...existing, kind: template.kind, primary: template.primary, tone: template.tone } : {
+      return [existing ? { ...existing, kind: template.kind, primary: template.primary, tone: template.tone } : {
         ...template,
         id: `aux-${side}-${template.primary.toLowerCase()}`,
         x: left + SHIFT_WIDTH / 2,
         y: WORK_ROWS_TOP,
         z: nextZ++,
-      };
+      }];
     });
 
     const byResetUnit = new Map(sideMagnets.map((magnet) => [magnet.primary, magnet]));
-    AUX_RESET_COLUMNS.forEach((units, column) => {
-      units.forEach((unit, row) => {
+    const orderedUnits = AUX_RESET_COLUMNS.flatMap((units) => units);
+    orderedUnits.filter((unit) => byResetUnit.has(unit))
+      .forEach((unit, index) => {
         const magnet = byResetUnit.get(unit);
         if (!magnet) return;
         const positioned = {
           ...magnet,
-          x: Math.round(left + 600 + column * 64),
-          y: WORK_ROWS_TOP + 4 + row * 22,
+          x: left + 660,
+          y: WORK_ROWS_TOP + 4 + index * 22,
           height: 20,
           z: nextZ++,
         };
         cleanedAux.push(positioned);
         auxPositions.set(positioned.id, positioned);
-      });
     });
   });
 
@@ -458,32 +585,40 @@ function resetAuxiliaryMagnetsToMiddle(magnets: Magnet[]) {
     if (magnet.kind !== "person" || !magnet.attachedTo) return magnet;
     const auxiliary = auxPositions.get(magnet.attachedTo);
     if (auxiliary) return { ...magnet, x: auxiliary.x + auxiliary.width + 4, y: auxiliary.y, z: auxiliary.z + 1 };
-    return existingAuxIds.has(magnet.attachedTo) ? { ...magnet, attachedTo: undefined } : magnet;
+    return resettableAuxIds.has(magnet.attachedTo) ? { ...magnet, attachedTo: undefined } : magnet;
   });
 
   return [...repositioned, ...cleanedAux];
 }
 
-function attachPersonToNearestEquipment(magnets: Magnet[], personId: string) {
+function attachPersonToNearestEquipment(magnets: Magnet[], personId: string, sectionCount: WorkSectionCount) {
   const person = magnets.find((magnet) => magnet.id === personId && magnet.kind === "person");
   if (!person) return magnets;
+  const diggerRows = getDiggerRows(magnets, sectionCount);
   const occupiedTargets = new Set(
     magnets.filter((magnet) => magnet.kind === "person" && magnet.id !== personId && magnet.attachedTo)
       .map((magnet) => magnet.attachedTo as string),
   );
   const targets = magnets
     .filter((magnet) => ATTACHABLE_KINDS.has(magnet.kind) && !occupiedTargets.has(magnet.id))
-    .map((target) => ({ target, distance: rectangleDistance(person, target) }))
-    .filter(({ target, distance }) =>
-      distance <= ATTACH_DISTANCE && person.x + person.width / 2 >= target.x + target.width,
+    .map((target) => {
+      const rowIndex = diggerRows.get(target.id);
+      const position = rowIndex === undefined ? null : diggerPosition(target, sectionCount, rowIndex);
+      const attachmentTarget = position
+        ? { ...target, x: position.left, y: position.top, width: position.width, height: position.height }
+        : target;
+      return { target, attachmentTarget, distance: rectangleDistance(person, attachmentTarget) };
+    })
+    .filter(({ attachmentTarget, distance }) =>
+      distance <= ATTACH_DISTANCE && person.x + person.width / 2 >= attachmentTarget.x + attachmentTarget.width,
     )
     .sort((a, b) => a.distance - b.distance);
 
-  for (const { target } of targets) {
+  for (const { target, attachmentTarget } of targets) {
     const candidate = {
       ...person,
-      x: target.x + target.width + ATTACH_GAP,
-      y: target.y + (target.height - person.height) / 2,
+      x: attachmentTarget.x + attachmentTarget.width + ATTACH_GAP,
+      y: attachmentTarget.y + (attachmentTarget.height - person.height) / 2,
       attachedTo: target.id,
       z: target.z + 1,
     };
@@ -541,6 +676,11 @@ export default function Home() {
   const [shiftEditorOpen, setShiftEditorOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
+  const [pitListOpen, setPitListOpen] = useState(false);
+  const [diggerListOpen, setDiggerListOpen] = useState(false);
+  const [pitDetailsMagnet, setPitDetailsMagnet] = useState<Magnet | null>(null);
+  const [warning, setWarning] = useState<BoardWarning | null>(null);
+  const [confirmation, setConfirmation] = useState<ConfirmationPrompt | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [tvScale, setTvScale] = useState(1);
   const [tvScaleY, setTvScaleY] = useState(1);
@@ -551,7 +691,11 @@ export default function Home() {
   const keyboardHistoryRef = useRef<MagneticBoardState | null>(null);
   const stateRef = useRef(board);
   const savingRef = useRef(false);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const saveRevisionRef = useRef(0);
+  const loadInFlightRef = useRef(false);
   const editorOpenRef = useRef(false);
+  const confirmationResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
 
   useEffect(() => {
     if (!presentation) return;
@@ -629,6 +773,25 @@ export default function Home() {
     return ids;
   }, [board.magnets]);
 
+  const pitWorkAreaRows = useMemo(() => {
+    const sectionCount = board.workSectionCount ?? 4;
+    const rows = new Map<string, number>();
+    (["day", "night"] as ShiftSide[]).forEach((side) => {
+      board.magnets
+        .filter((magnet) => isPitWorkAreaControl(magnet) && (magnet.x < SHIFT_WIDTH ? "day" : "night") === side)
+        .sort((a, b) => a.y - b.y || a.id.localeCompare(b.id))
+        .slice(0, sectionCount)
+        .forEach((magnet, rowIndex) => rows.set(magnet.id, rowIndex));
+    });
+    return rows;
+  }, [board.magnets, board.workSectionCount]);
+  const pitWorkAreaOptions = board.pitWorkAreas?.length ? board.pitWorkAreas : PIT_WORK_AREA_OPTIONS;
+  const diggerOptions = board.diggerOptions?.length ? board.diggerOptions : DIGGER_OPTIONS;
+  const diggerRows = useMemo(() => {
+    const sectionCount = board.workSectionCount ?? 4;
+    return getDiggerRows(board.magnets, sectionCount);
+  }, [board.magnets, board.workSectionCount]);
+
   const parkUpCounts = useMemo(() => countParkUpZones(board.magnets), [board.magnets]);
   const totalParked = useMemo(
     () => Object.values(parkUpCounts).reduce((total, count) => total + count, 0),
@@ -640,9 +803,33 @@ export default function Home() {
     setBoard(next);
   }, []);
 
+  const requestConfirmation = useCallback((prompt: ConfirmationPrompt) => {
+    confirmationResolverRef.current?.(false);
+    setConfirmation(prompt);
+    return new Promise<boolean>((resolve) => {
+      confirmationResolverRef.current = resolve;
+    });
+  }, []);
+
+  const closeConfirmation = useCallback((confirmed: boolean) => {
+    const resolve = confirmationResolverRef.current;
+    confirmationResolverRef.current = null;
+    setConfirmation(null);
+    resolve?.(confirmed);
+  }, []);
+
   const commitBoard = useCallback(async (next: MagneticBoardState, options: CommitOptions = {}) => {
+    const historyBase = cloneBoard(options.historyBase ?? stateRef.current);
+    const duplicateTruck = findNewDuplicateTruck(historyBase.magnets, next.magnets);
+    if (duplicateTruck) {
+      updateBoard(historyBase);
+      setWarning({
+        title: "Duplicate truck",
+        message: `${duplicateTruck.number} is already assigned to ${duplicateTruck.side === "day" ? "Day" : "Night"} shift. Each truck number can only appear once within that shift. The shared bottom section is excluded.`,
+      });
+      return;
+    }
     if (options.recordHistory !== false) {
-      const historyBase = cloneBoard(options.historyBase ?? stateRef.current);
       setUndoStack((history) => [...history.slice(-19), historyBase]);
     }
     const optimistic = {
@@ -652,10 +839,11 @@ export default function Home() {
       updatedBy: "MINE CONTROL",
     };
     updateBoard(optimistic);
+    const revision = ++saveRevisionRef.current;
     savingRef.current = true;
     setSyncState("saving");
 
-    try {
+    const save = async () => {
       const response = await fetch("/api/board", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -663,12 +851,20 @@ export default function Home() {
       });
       if (!response.ok) throw new Error("Unable to save board");
       const payload = (await response.json()) as { board: MagneticBoardState };
-      updateBoard(payload.board);
-      setSyncState("saved");
+      if (revision === saveRevisionRef.current) {
+        updateBoard(payload.board);
+        setSyncState("saved");
+      }
+    };
+
+    const queuedSave = saveQueueRef.current.catch(() => undefined).then(save);
+    saveQueueRef.current = queuedSave.then(() => undefined, () => undefined);
+    try {
+      await queuedSave;
     } catch {
-      setSyncState("error");
+      if (revision === saveRevisionRef.current) setSyncState("error");
     } finally {
-      savingRef.current = false;
+      if (revision === saveRevisionRef.current) savingRef.current = false;
     }
   }, [updateBoard]);
 
@@ -676,7 +872,8 @@ export default function Home() {
     let active = true;
 
     const loadBoard = async (quiet = false) => {
-      if (savingRef.current || dragRef.current || editorOpenRef.current) return;
+      if (savingRef.current || loadInFlightRef.current || dragRef.current || editorOpenRef.current || document.hidden) return;
+      loadInFlightRef.current = true;
       try {
         const response = await fetch("/api/board", { cache: "no-store" });
         if (!response.ok) throw new Error("Unable to load board");
@@ -782,6 +979,8 @@ export default function Home() {
         }
       } catch {
         if (active && !quiet) setSyncState("error");
+      } finally {
+        loadInFlightRef.current = false;
       }
     };
 
@@ -822,64 +1021,65 @@ export default function Home() {
     void commitBoard(cloneBoard(previous), { recordHistory: false });
   }, [commitBoard, locked, undoStack]);
 
-  const saveStartingLayout = useCallback(() => {
-    if (!window.confirm("Save the current magnet layout as the new starting layout?")) return;
+  const saveStartingLayout = useCallback(async () => {
+    if (!(await requestConfirmation({ title: "Save starting layout?", message: "Use the current magnet arrangement as the new starting layout for future board resets?", confirmLabel: "SAVE LAYOUT" }))) return;
     const current = stateRef.current;
     void commitBoard({
       ...current,
       startingMagnets: current.magnets.map((magnet) => ({ ...magnet })),
     });
-  }, [commitBoard]);
+  }, [commitBoard, requestConfirmation]);
 
-  const clearPersonnel = useCallback(() => {
+  const clearPersonnel = useCallback(async () => {
     const current = stateRef.current;
     const personnelCount = current.magnets.filter((magnet) => magnet.kind === "person").length;
     if (!personnelCount) {
-      window.alert("There are no personnel magnets on the board.");
+      setWarning({ title: "No personnel found", message: "There are no personnel magnets on the board to clear." });
       return;
     }
-    if (!window.confirm(`Remove all ${personnelCount} personnel magnets? Assets, locations and notes will stay in place.`)) return;
+    if (!(await requestConfirmation({ title: "Clear personnel?", message: `Remove all ${personnelCount} personnel magnets? Assets, locations and notes will remain in place.`, confirmLabel: "CLEAR PERSONNEL" }))) return;
     setSelectedId(null);
     void commitBoard({
       ...current,
       magnets: current.magnets.filter((magnet) => magnet.kind !== "person"),
     });
-  }, [commitBoard]);
+  }, [commitBoard, requestConfirmation]);
 
-  const cleanUpTrucks = useCallback(() => {
+  const cleanUpTrucks = useCallback(async () => {
     const current = stateRef.current;
-    if (!window.confirm("Display the complete truck fleet on both Day and Night shift and arrange the trucks into clean vertical stacks?")) return;
+    if (!(await requestConfirmation({ title: "Clean up trucks?", message: "Arrange two-digit (777) trucks in one column and three-digit (789) trucks in another on each shift? Trucks in the shared bottom section will remain there.", confirmLabel: "CLEAN UP TRUCKS" }))) return;
     setSelectedId(null);
     void commitBoard({
       ...current,
-      magnets: cleanUpTruckMagnets(current.magnets, current.workSectionCount ?? 4),
+      magnets: cleanUpTruckMagnets(current.magnets),
     });
-  }, [commitBoard]);
+  }, [commitBoard, requestConfirmation]);
 
-  const resetAuxiliaryToMiddle = useCallback(() => {
+  const resetAuxiliaryToMiddle = useCallback(async () => {
     const current = stateRef.current;
-    if (!window.confirm("Reset all auxiliary equipment into two columns in the upper-middle of each shift? Excavators and light vehicles will stay where they are.")) return;
+    if (!(await requestConfirmation({ title: "Reset auxiliary layout?", message: "Reset auxiliary equipment into two columns in the upper-middle of each shift? Excavators, light vehicles, and assets in the shared bottom section will remain where they are.", confirmLabel: "RESET AUX LAYOUT" }))) return;
     setSelectedId(null);
     void commitBoard({
       ...current,
       magnets: resetAuxiliaryMagnetsToMiddle(current.magnets),
     });
-  }, [commitBoard]);
+  }, [commitBoard, requestConfirmation]);
 
-  const toggleFifthSection = useCallback(() => {
+  const changeSectionCount = useCallback((delta: -1 | 1) => {
     const current = stateRef.current;
-    const workSectionCount = (current.workSectionCount ?? 4) === 4 ? 5 : 4;
-    const remap = workSectionCount === 4 ? spreadFourSectionMagnets : compactFiveSectionMagnets;
+    const previousCount = current.workSectionCount ?? 4;
+    const workSectionCount = Math.max(1, Math.min(5, previousCount + delta)) as WorkSectionCount;
+    if (workSectionCount === previousCount) return;
     void commitBoard({
       ...current,
       workSectionCount,
-      magnets: remap(current.magnets),
+      magnets: resizeWorkSections(current.magnets, previousCount, workSectionCount),
     });
   }, [commitBoard]);
 
-  const copyShift = useCallback((source: ShiftSide) => {
+  const copyShift = useCallback(async (source: ShiftSide) => {
     const destination: ShiftSide = source === "day" ? "night" : "day";
-    if (!window.confirm(`Replace the ${destination} work area with a copy of the ${source} work area?`)) return;
+    if (!(await requestConfirmation({ title: "Copy shift allocations?", message: `Replace the ${destination.toUpperCase()} work area with a copy of the ${source.toUpperCase()} work area? The shared bottom section will not be changed.`, confirmLabel: "COPY SHIFT" }))) return;
     const current = stateRef.current;
     const sourceLeft = source === "day" ? 0 : SHIFT_WIDTH;
     const destinationLeft = destination === "day" ? 0 : SHIFT_WIDTH;
@@ -902,11 +1102,11 @@ export default function Home() {
     const retained = current.magnets.filter((magnet) => !inSide(magnet, destinationLeft));
     void commitBoard({ ...current, magnets: [...retained, ...copiedMagnets] });
     setCopyDialogOpen(false);
-  }, [commitBoard]);
+  }, [commitBoard, requestConfirmation]);
 
-  const allocateCrew = useCallback((crew: CrewCode, side: ShiftSide) => {
+  const allocateCrew = useCallback(async (crew: CrewCode, side: ShiftSide) => {
     const sideLabel = side === "day" ? "DAY" : "NIGHT";
-    if (!window.confirm(`Place all ${crew} Crew magnets down the right side of ${sideLabel} shift? Only the crew currently on ${sideLabel} shift will be replaced.`)) return;
+    if (!(await requestConfirmation({ title: `Allocate ${crew} Crew?`, message: `Place all ${crew} Crew magnets down the right side of ${sideLabel} shift? Only the crew currently on ${sideLabel} shift will be replaced.`, confirmLabel: "ALLOCATE CREW" }))) return;
     const current = stateRef.current;
     const left = side === "day" ? 0 : SHIFT_WIDTH;
     const right = left + SHIFT_WIDTH;
@@ -916,14 +1116,19 @@ export default function Home() {
     );
     const highestZ = Math.max(1, ...retained.map((magnet) => magnet.z));
     const crewRowSpacing = 22;
-    const rowsPerColumn = Math.floor((PARK_UP_TOP - WORK_ROWS_TOP - 8) / crewRowSpacing);
+    const rowsPerColumn = Math.ceil(crewRosters[crew].length / 2);
     const placed: Magnet[] = crewRosters[crew].map((template, index) => {
       const column = Math.floor(index / rowsPerColumn);
       const row = index % rowsPerColumn;
+      const savedName = current.personnelNames?.[personnelRosterKey(template) as string];
+      const primary = savedName ?? template.primary;
+      const width = responsiveMagnetWidth("person", primary) ?? template.width;
       return {
         ...template,
+        primary,
+        width,
         id: `crew-${side}-${crew.toLowerCase()}-${(template.fullName ?? template.primary).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        x: right - 8 - template.width - column * 118,
+        x: right - 8 - width - column * 118,
         y: WORK_ROWS_TOP + 4 + row * crewRowSpacing,
         z: highestZ + index + 1,
       };
@@ -942,14 +1147,14 @@ export default function Home() {
       roster: `DAY: ${dayCrew ? `${dayCrew} CREW` : "NOT SET"} · NIGHT: ${nightCrew ? `${nightCrew} CREW` : "NOT SET"}`,
       magnets: [...retained, ...placed],
     }, { movedId: placed[0]?.id });
-  }, [commitBoard]);
+  }, [commitBoard, requestConfirmation]);
 
   const toggleFullscreen = useCallback(async () => {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else await document.documentElement.requestFullscreen();
     } catch {
-      window.alert("Full screen is not available in this browser.");
+      setWarning({ title: "Full screen unavailable", message: "This browser or device does not currently allow full-screen mode." });
     }
   }, []);
 
@@ -963,7 +1168,7 @@ export default function Home() {
     };
     const created = findOpenPosition(proposed, stateRef.current.magnets, x, y);
     if (!created) {
-      window.alert("There is no clear space available for another magnet.");
+      setWarning({ title: "No clear space", message: "There is no clear position available for another magnet. Move an existing magnet and try again." });
       return;
     }
     setSelectedId(created.id);
@@ -984,9 +1189,25 @@ export default function Home() {
     addInventoryMagnet(template, snapValue(x, snapToGrid), snapValue(y, snapToGrid));
   };
 
+  const changePitWorkArea = (magnet: Magnet, primary: string) => {
+    const current = stateRef.current;
+    void commitBoard({
+      ...current,
+      magnets: current.magnets.map((item) => item.id === magnet.id ? { ...item, primary } : item),
+    }, { movedId: magnet.id });
+  };
+
+  const changeDigger = (magnet: Magnet, primary: string) => {
+    const current = stateRef.current;
+    void commitBoard({
+      ...current,
+      magnets: current.magnets.map((item) => item.id === magnet.id ? { ...item, primary } : item),
+    }, { movedId: magnet.id });
+  };
+
   useEffect(() => {
-    editorOpenRef.current = Boolean(editorMagnet || shiftEditorOpen || copyDialogOpen || crewDialogOpen);
-  }, [copyDialogOpen, crewDialogOpen, editorMagnet, shiftEditorOpen]);
+    editorOpenRef.current = Boolean(editorMagnet || shiftEditorOpen || copyDialogOpen || crewDialogOpen || pitListOpen || pitDetailsMagnet || diggerListOpen);
+  }, [copyDialogOpen, crewDialogOpen, diggerListOpen, editorMagnet, pitDetailsMagnet, pitListOpen, shiftEditorOpen]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1134,7 +1355,7 @@ export default function Home() {
     setInvalidDropId(null);
     const dragged = dropMagnets.find((magnet) => magnet.id === draggedId);
     const magnets = dragged?.kind === "person"
-      ? attachPersonToNearestEquipment(dropMagnets, draggedId)
+      ? attachPersonToNearestEquipment(dropMagnets, draggedId, stateRef.current.workSectionCount ?? 4)
       : dropMagnets;
     void commitBoard(
       { ...stateRef.current, magnets },
@@ -1151,6 +1372,7 @@ export default function Home() {
 
   const saveMagnet = (magnet: Magnet) => {
     const current = stateRef.current;
+    const original = current.magnets.find((item) => item.id === magnet.id);
     const exists = current.magnets.some((item) => item.id === magnet.id);
     const placed = findOpenPosition(
       magnet,
@@ -1160,7 +1382,7 @@ export default function Home() {
       exists ? new Set([magnet.id]) : new Set(),
     );
     if (!placed) {
-      window.alert("That size would overlap another magnet and no clear space is available.");
+      setWarning({ title: "Magnet cannot be placed", message: "That magnet size would overlap another magnet, and no nearby clear position is available." });
       return;
     }
     const nextMagnets = exists
@@ -1175,6 +1397,14 @@ export default function Home() {
     const next = {
       ...current,
       magnets: nextMagnets,
+      personnelNames: original?.kind === "person" && magnet.kind === "person"
+        ? {
+            ...current.personnelNames,
+            ...((personnelRosterKey(original) ?? personnelRosterKey(magnet))
+              ? { [(personnelRosterKey(original) ?? personnelRosterKey(magnet)) as string]: placed.primary }
+              : {}),
+          }
+        : current.personnelNames,
     };
     setEditorMagnet(null);
     setSelectedId(magnet.id);
@@ -1204,7 +1434,7 @@ export default function Home() {
     };
     const copy = findOpenPosition(proposed, stateRef.current.magnets, proposed.x, proposed.y);
     if (!copy) {
-      window.alert("There is no clear space available for a duplicate magnet.");
+      setWarning({ title: "Cannot duplicate magnet", message: "There is no clear position available for the duplicate. Move an existing magnet and try again." });
       return;
     }
     const next = { ...stateRef.current, magnets: [...stateRef.current.magnets, copy] };
@@ -1213,14 +1443,23 @@ export default function Home() {
     void commitBoard(next, { movedId: copy.id });
   };
 
-  const resetBoard = () => {
-    if (!window.confirm("Reset every magnet to the starting layout?")) return;
+  const resetBoard = async () => {
+    if (!(await requestConfirmation({ title: "Reset working area?", message: "Rebuild the upper board in the saved structured layout? Everything allocated in the shared bottom section will stay exactly where it is.", confirmLabel: "RESET BOARD" }))) return;
     const current = stateRef.current;
     const startingMagnets = current.startingMagnets ?? defaultMagneticBoard.magnets;
+    const protectedBottom = current.magnets
+      .filter((magnet) => magnet.y >= PARK_UP_TOP)
+      .map((magnet) => ({ ...magnet }));
+    const protectedIds = new Set(protectedBottom.map((magnet) => magnet.id));
+    const startingWorkingArea = startingMagnets
+      .filter((magnet) => magnet.y < PARK_UP_TOP && !protectedIds.has(magnet.id))
+      .map((magnet) => ({ ...magnet }));
+    const restored = inferNearbyAttachments([...startingWorkingArea, ...protectedBottom]).magnets;
+    const structured = resetAuxiliaryMagnetsToMiddle(cleanUpTruckMagnets(restored));
     setSelectedId(null);
     void commitBoard({
       ...current,
-      magnets: inferNearbyAttachments(startingMagnets.map((magnet) => ({ ...magnet }))).magnets,
+      magnets: structured,
       updatedAt: new Date().toISOString(),
       updatedBy: "MINE CONTROL",
     });
@@ -1339,9 +1578,6 @@ export default function Home() {
           <button className="quick-button clear-personnel-button" type="button" onClick={clearPersonnel} disabled={locked}>CLEAR PERSONNEL</button>
           <button className="quick-button cleanup-trucks-button" type="button" onClick={cleanUpTrucks} disabled={locked}>CLEAN UP TRUCKS</button>
           <button className="quick-button cleanup-aux-button" type="button" onClick={resetAuxiliaryToMiddle} disabled={locked}>RESET AUX LAYOUT</button>
-          <button className="quick-button" type="button" onClick={toggleFifthSection} disabled={locked}>
-            {(board.workSectionCount ?? 4) === 4 ? "+ 5TH SECTION" : "− 5TH SECTION"}
-          </button>
           <button className="quick-button" type="button" onClick={saveStartingLayout} disabled={locked}>SAVE START</button>
           <button className="quick-button" type="button" onClick={() => setCopyDialogOpen(true)} disabled={locked}>COPY SHIFT</button>
           <button className="quick-button" type="button" onClick={toggleFullscreen}>{isFullscreen ? "EXIT FULL SCREEN" : "FULL SCREEN"}</button>
@@ -1440,7 +1676,84 @@ export default function Home() {
           >
             <BoardBackground truckStats={truckStats} parkUpCounts={parkUpCounts} board={board} />
 
+            {!presentation && (
+              <div className="bottom-section-controls" onPointerDown={(event) => event.stopPropagation()}>
+                <button
+                  type="button"
+                  aria-label="Remove bottom section"
+                  title="Remove bottom section"
+                  onClick={() => changeSectionCount(-1)}
+                  disabled={locked || (board.workSectionCount ?? 4) === 1}
+                >−</button>
+                <span>{board.workSectionCount ?? 4} SECTIONS</span>
+                <button
+                  type="button"
+                  aria-label="Add bottom section"
+                  title="Add bottom section"
+                  onClick={() => changeSectionCount(1)}
+                  disabled={locked || (board.workSectionCount ?? 4) === 5}
+                >+</button>
+              </div>
+            )}
+
             {board.magnets.map((item) => (
+              isPitWorkAreaControl(item) && pitWorkAreaRows.has(item.id) ? (
+                <div
+                  key={item.id}
+                  className="work-area-control"
+                  data-magnet-id={item.id}
+                  style={pitWorkAreaPosition(item, board.workSectionCount ?? 4, pitWorkAreaRows.get(item.id) as number)}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  <select
+                    aria-label="Pit / work area"
+                    value={item.primary}
+                    disabled={locked || presentation}
+                    onChange={(event) => {
+                      if (event.target.value === "__edit_list__") setPitListOpen(true);
+                      else changePitWorkArea(item, event.target.value);
+                    }}
+                  >
+                    {!pitWorkAreaOptions.includes(item.primary) && <option value={item.primary}>{item.primary}</option>}
+                    {pitWorkAreaOptions.map((pit) => <option key={pit} value={pit}>{pit}</option>)}
+                    <option disabled>──────────</option>
+                    <option value="__edit_list__">EDIT LIST…</option>
+                  </select>
+                  <button
+                    type="button"
+                    disabled={locked || presentation}
+                    onClick={() => setPitDetailsMagnet(item)}
+                    aria-label={`Edit RL and shot number for ${item.primary}`}
+                    title="Edit RL and shot number"
+                  >
+                    {item.secondary || "ADD RL / SHOT"}
+                  </button>
+                </div>
+              ) : isPitWorkAreaControl(item) ? null : isDiggerControl(item) && diggerRows.has(item.id) ? (
+                <div
+                  key={item.id}
+                  className="digger-control"
+                  data-magnet-id={item.id}
+                  style={diggerPosition(item, board.workSectionCount ?? 4, diggerRows.get(item.id) as number)}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  <select
+                    aria-label="Digger"
+                    value={item.primary}
+                    disabled={locked || presentation}
+                    onChange={(event) => {
+                      if (event.target.value === "__edit_list__") setDiggerListOpen(true);
+                      else changeDigger(item, event.target.value);
+                    }}
+                  >
+                    {!diggerOptions.includes(item.primary) && <option value={item.primary}>{item.primary}</option>}
+                    {diggerOptions.map((digger) => <option key={digger} value={digger}>{digger}</option>)}
+                    <option disabled>──────────</option>
+                    <option value="__edit_list__">EDIT LIST…</option>
+                  </select>
+                  <span aria-hidden="true">⌄</span>
+                </div>
+              ) : isDiggerControl(item) ? null : (
               <button
                 key={item.id}
                 type="button"
@@ -1467,6 +1780,7 @@ export default function Home() {
               >
                 <MagnetContent magnet={item} />
               </button>
+              )
             ))}
           </div>
         </div>
@@ -1541,7 +1855,172 @@ export default function Home() {
           ]))}
         />
       )}
+
+      {warning && (
+        <WarningModal warning={warning} onClose={() => setWarning(null)} />
+      )}
+
+      {confirmation && (
+        <ConfirmationModal prompt={confirmation} onCancel={() => closeConfirmation(false)} onConfirm={() => closeConfirmation(true)} />
+      )}
+
+      {pitListOpen && (
+        <PitWorkAreaListModal
+          options={pitWorkAreaOptions}
+          onClose={() => setPitListOpen(false)}
+          onSave={(options) => {
+            setPitListOpen(false);
+            void commitBoard({ ...stateRef.current, pitWorkAreas: options });
+          }}
+        />
+      )}
+
+      {diggerListOpen && (
+        <DiggerListModal
+          options={diggerOptions}
+          onClose={() => setDiggerListOpen(false)}
+          onSave={(options) => {
+            setDiggerListOpen(false);
+            void commitBoard({ ...stateRef.current, diggerOptions: options });
+          }}
+        />
+      )}
+
+      {pitDetailsMagnet && (
+        <PitDetailsModal
+          magnet={pitDetailsMagnet}
+          onClose={() => setPitDetailsMagnet(null)}
+          onSave={(secondary) => {
+            const current = stateRef.current;
+            setPitDetailsMagnet(null);
+            void commitBoard({
+              ...current,
+              magnets: current.magnets.map((item) => item.id === pitDetailsMagnet.id ? { ...item, secondary } : item),
+            }, { movedId: pitDetailsMagnet.id });
+          }}
+        />
+      )}
     </main>
+  );
+}
+
+function PitDetailsModal({ magnet, onClose, onSave }: { magnet: Magnet; onClose: () => void; onSave: (secondary?: string) => void }) {
+  const initial = parseLocationDetails(magnet.secondary);
+  const [rl, setRl] = useState(initial.rl);
+  const [shot, setShot] = useState(initial.shot);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="simple-modal pit-details-modal" role="dialog" aria-modal="true" aria-label={`Edit RL and shot number for ${magnet.primary}`} onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div><span>PIT / WORK AREA</span><h2>{magnet.primary}</h2></div>
+          <button type="button" onClick={onClose} aria-label="Close">×</button>
+        </header>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          onSave(formatLocationDetails(rl, shot) || undefined);
+        }}>
+          <div className="pit-details-grid">
+            <label>RL<input autoFocus placeholder="E.G. 219" value={rl} onChange={(event) => setRl(event.target.value)} /></label>
+            <label>SHOT NUMBER<input placeholder="E.G. 5405" value={shot} onChange={(event) => setShot(event.target.value)} /></label>
+          </div>
+          <footer>
+            <button className="secondary-button" type="button" onClick={onClose}>CANCEL</button>
+            <button className="save-button" type="submit">SAVE DETAILS</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function DiggerListModal({ options, onClose, onSave }: { options: string[]; onClose: () => void; onSave: (options: string[]) => void }) {
+  const [value, setValue] = useState(options.join("\n"));
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="simple-modal pit-list-modal" role="dialog" aria-modal="true" aria-label="Edit digger list" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div><span>BOARD SETTINGS</span><h2>EDIT DIGGER LIST</h2></div>
+          <button type="button" onClick={onClose} aria-label="Close">×</button>
+        </header>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          const next = [...new Set(value.split(/\r?\n/).map((item) => item.trim().toUpperCase()).filter(Boolean))];
+          if (next.length) onSave(next);
+        }}>
+          <p>Enter one digger number per line. You can add, rename, remove, or reorder entries.</p>
+          <label>AVAILABLE DIGGERS<textarea autoFocus rows={12} value={value} onChange={(event) => setValue(event.target.value)} /></label>
+          <footer>
+            <button className="secondary-button" type="button" onClick={onClose}>CANCEL</button>
+            <button className="save-button" type="submit">SAVE LIST</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function PitWorkAreaListModal({ options, onClose, onSave }: { options: string[]; onClose: () => void; onSave: (options: string[]) => void }) {
+  const [value, setValue] = useState(options.join("\n"));
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="simple-modal pit-list-modal" role="dialog" aria-modal="true" aria-label="Edit pit and work area list" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div><span>BOARD SETTINGS</span><h2>EDIT PIT / WORK AREA LIST</h2></div>
+          <button type="button" onClick={onClose} aria-label="Close">×</button>
+        </header>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          const next = [...new Set(value.split(/\r?\n/).map((item) => item.trim().toUpperCase()).filter(Boolean))];
+          if (next.length) onSave(next);
+        }}>
+          <p>Enter one pit or work area per line. You can add, rename, remove, or reorder entries.</p>
+          <label>AVAILABLE PIT / WORK AREAS<textarea autoFocus rows={14} value={value} onChange={(event) => setValue(event.target.value)} /></label>
+          <footer>
+            <button className="secondary-button" type="button" onClick={onClose}>CANCEL</button>
+            <button className="save-button" type="submit">SAVE LIST</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmationModal({ prompt, onCancel, onConfirm }: { prompt: ConfirmationPrompt; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="modal-backdrop confirmation-backdrop" role="presentation" onMouseDown={onCancel}>
+      <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-message" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="confirmation-symbol" aria-hidden="true">?</div>
+        <div className="confirmation-copy">
+          <span>CONFIRM BOARD ACTION</span>
+          <h2 id="confirmation-title">{prompt.title}</h2>
+          <p id="confirmation-message">{prompt.message}</p>
+        </div>
+        <button className="warning-close" type="button" onClick={onCancel} aria-label="Cancel action">×</button>
+        <footer>
+          <button className="secondary-button confirmation-cancel" type="button" onClick={onCancel}>CANCEL</button>
+          <button className="confirmation-confirm" type="button" onClick={onConfirm} autoFocus>{prompt.confirmLabel}</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function WarningModal({ warning, onClose }: { warning: BoardWarning; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop warning-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="warning-modal" role="alertdialog" aria-modal="true" aria-labelledby="warning-title" aria-describedby="warning-message" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="warning-symbol" aria-hidden="true">!</div>
+        <div className="warning-copy">
+          <span>SHIFTBOARD WARNING</span>
+          <h2 id="warning-title">{warning.title}</h2>
+          <p id="warning-message">{warning.message}</p>
+        </div>
+        <button className="warning-close" type="button" onClick={onClose} aria-label="Close warning">×</button>
+        <footer>
+          <button className="warning-confirm" type="button" onClick={onClose} autoFocus>UNDERSTOOD</button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1629,7 +2108,7 @@ function BoardBackground({
   );
 }
 
-function FloorPickupGaps({ side, sectionCount }: { side: "day" | "night"; sectionCount: 4 | 5 }) {
+function FloorPickupGaps({ side, sectionCount }: { side: "day" | "night"; sectionCount: WorkSectionCount }) {
   return (
     <div className={`floor-pickup-gaps ${side}-floor-pickup-gaps work-sections-${sectionCount}`}>
       {Array.from({ length: sectionCount }, (_, index) => (
@@ -1744,6 +2223,7 @@ function MagnetEditor({
   onDuplicate: (magnet: Magnet) => void;
 }) {
   const [draft, setDraft] = useState(magnet);
+  const locationDetails = parseLocationDetails(draft.secondary);
 
   const changeKind = (kind: MagnetKind) => {
     const base = newMagnet(kind);
@@ -1797,14 +2277,44 @@ function MagnetEditor({
                 ))}
               </select>
             </label>
-            <label>
-              MAIN TEXT
-              <input required value={draft.primary} onChange={(event) => setDraft({ ...draft, primary: event.target.value })} />
-            </label>
-            <label className="editor-wide">
-              SECOND LINE / OPERATOR
-              <input value={draft.secondary ?? ""} onChange={(event) => setDraft({ ...draft, secondary: event.target.value })} />
-            </label>
+            {draft.kind === "location" ? (
+              <>
+                <label>
+                  PIT / WORK AREA
+                  <input required list="pit-work-area-editor-options" value={draft.primary} onChange={(event) => setDraft({ ...draft, primary: event.target.value })} />
+                  <datalist id="pit-work-area-editor-options">
+                    {PIT_WORK_AREA_OPTIONS.map((pit) => <option key={pit} value={pit} />)}
+                  </datalist>
+                </label>
+                <label>
+                  RL
+                  <input
+                    placeholder="E.G. 219"
+                    value={locationDetails.rl}
+                    onChange={(event) => setDraft({ ...draft, secondary: formatLocationDetails(event.target.value, locationDetails.shot) })}
+                  />
+                </label>
+                <label>
+                  SHOT NUMBER
+                  <input
+                    placeholder="E.G. 5405"
+                    value={locationDetails.shot}
+                    onChange={(event) => setDraft({ ...draft, secondary: formatLocationDetails(locationDetails.rl, event.target.value) })}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  MAIN TEXT
+                  <input required value={draft.primary} onChange={(event) => setDraft({ ...draft, primary: event.target.value })} />
+                </label>
+                <label className="editor-wide">
+                  SECOND LINE / OPERATOR
+                  <input value={draft.secondary ?? ""} onChange={(event) => setDraft({ ...draft, secondary: event.target.value })} />
+                </label>
+              </>
+            )}
             {draft.kind === "person" && (
               <>
                 <label>

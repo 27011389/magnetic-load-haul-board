@@ -82,6 +82,7 @@ export type Magnet = {
 };
 
 export type CrewCode = "A" | "B" | "C";
+export type WorkSectionCount = 1 | 2 | 3 | 4 | 5;
 
 const FOUR_SECTION_HEIGHT = (PARK_UP_TOP - WORK_ROWS_TOP) / 4;
 
@@ -97,14 +98,22 @@ export function spreadFourSectionMagnets(magnets: Magnet[]) {
   });
 }
 
-export function compactFiveSectionMagnets(magnets: Magnet[]) {
+export function resizeWorkSections(
+  magnets: Magnet[],
+  fromCount: WorkSectionCount,
+  toCount: WorkSectionCount,
+) {
+  const oldHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / fromCount;
+  const newHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / toCount;
+
   return magnets.map((magnet) => {
     if (magnet.crew || magnet.y < WORK_ROWS_TOP || magnet.y >= PARK_UP_TOP) return magnet;
-    const row = Math.min(3, Math.floor((magnet.y - WORK_ROWS_TOP) / FOUR_SECTION_HEIGHT));
-    const offset = magnet.y - (WORK_ROWS_TOP + row * FOUR_SECTION_HEIGHT);
+    const oldRow = Math.min(fromCount - 1, Math.floor((magnet.y - WORK_ROWS_TOP) / oldHeight));
+    const rowOffset = (magnet.y - (WORK_ROWS_TOP + oldRow * oldHeight)) / oldHeight;
+    const newRow = Math.min(oldRow, toCount - 1);
     return {
       ...magnet,
-      y: Math.round(WORK_ROWS_TOP + row * WORK_ROW_HEIGHT + (offset * WORK_ROW_HEIGHT) / FOUR_SECTION_HEIGHT),
+      y: Math.round(WORK_ROWS_TOP + newRow * newHeight + rowOffset * newHeight),
     };
   });
 }
@@ -114,13 +123,16 @@ export type MagnetTemplate = Pick<Magnet, "kind" | "primary" | "tone" | "width" 
 export type MagneticBoardState = {
   layoutVersion: number;
   magnets: Magnet[];
+  personnelNames?: Record<string, string>;
+  pitWorkAreas?: string[];
+  diggerOptions?: string[];
   startingMagnets?: Magnet[];
   lastMovedId?: string;
   boardDate: string;
   roster: string;
   updatedAt: string;
   updatedBy: string;
-  workSectionCount?: 4 | 5;
+  workSectionCount?: WorkSectionCount;
 };
 
 export const kindDefaults: Record<MagnetKind, { width: number; height: number; tone: MagnetTone }> = {
@@ -264,7 +276,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
     ...people("d-corgan-p", ["BEAU"], 210, 516),
     ...equipment("d-corgan-dozers", "dozer", ["DZ018"], 142, 546),
     ...people("d-corgan-dozers-p", ["KANE"], 210, 546),
-    ...floorTruckPairs("d-corgan-trucks", "d-corgan-people", ["DT69", "DT71", "DT74", "DT75"], ["SUZETTE", "KARENE", "CHRIS", "TRAVIS"], 510),
+    ...floorTruckPairs("d-corgan-trucks", "d-corgan-people", ["DT63", "DT64", "DT69", "DT74"], ["SUZETTE", "KARENE", "CHRIS", "TRAVIS"], 510),
 
     item("d-palo", "location", "PALO", 10, 662, 118, 28, "blue", "RL 246 · SHOT 5606"),
     ...equipment("d-palo-assets", "excavator", ["EX31"], 142, 662),
