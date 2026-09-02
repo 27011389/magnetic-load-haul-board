@@ -144,7 +144,9 @@ const ALLOCATION_LANE_INSET = 6;
 const ALLOCATION_SNAP_DISTANCE = 10;
 const BOARD_REFRESH_INTERVAL_MS = 1_500;
 const MIGRATABLE_LAYOUT_VERSIONS = new Set([3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15]);
-const TV_SHARED_HEADER_HEIGHT = 100;
+const TV_SINGLE_HEADER_HEIGHT = 120;
+const TV_SINGLE_CONTENT_TOP = 100;
+const TV_SINGLE_CONTENT_HEIGHT = PARK_UP_TOP - TV_SINGLE_CONTENT_TOP;
 const V4_WORK_ROWS_TOP = 218;
 const V4_WORK_ROW_HEIGHT = 112;
 const V4_PARK_UP_TOP = 778;
@@ -1079,8 +1081,6 @@ export default function Home() {
   const [confirmation, setConfirmation] = useState<ConfirmationPrompt | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [tvScale, setTvScale] = useState(1);
-  const [tvScaleY, setTvScaleY] = useState(1);
-  const [tvHeaderScale, setTvHeaderScale] = useState(1);
   const [tvShiftView, setTvShiftView] = useState<TvShiftView>("both");
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -1100,25 +1100,18 @@ export default function Home() {
     if (!presentation) return;
 
     const fitBoardToScreen = () => {
-      const visibleWidth = tvShiftView === "both" ? BOARD_WIDTH : SHIFT_WIDTH;
       if (tvShiftView === "both") {
-        const scale = Math.min(
-          window.innerWidth / visibleWidth,
+        setTvScale(Math.min(
+          window.innerWidth / BOARD_WIDTH,
           window.innerHeight / BOARD_HEIGHT,
-        );
-        setTvScale(scale);
-        setTvScaleY(scale);
-        setTvHeaderScale(scale);
+        ));
       } else {
-        const headerScale = window.innerWidth / BOARD_WIDTH;
-        const availableBodyHeight = window.innerHeight - TV_SHARED_HEADER_HEIGHT * headerScale;
-        const bodyScale = Math.min(
-          window.innerWidth / visibleWidth,
-          availableBodyHeight / (PARK_UP_TOP - TV_SHARED_HEADER_HEIGHT),
-        );
-        setTvHeaderScale(headerScale);
-        setTvScale(Math.min(bodyScale * 1.5, window.innerWidth / visibleWidth));
-        setTvScaleY(bodyScale);
+        const horizontalGutter = 48;
+        const verticalGutter = 24;
+        setTvScale(Math.min(
+          (window.innerWidth - horizontalGutter) / SHIFT_WIDTH,
+          (window.innerHeight - TV_SINGLE_HEADER_HEIGHT - verticalGutter) / TV_SINGLE_CONTENT_HEIGHT,
+        ));
       }
     };
 
@@ -1235,6 +1228,10 @@ export default function Home() {
     () => Object.values(parkUpCounts).reduce((total, count) => total + count, 0),
     [parkUpCounts],
   );
+  const tvShiftStats = tvShiftView === "night"
+    ? { allocated: truckStats.nightAllocated, unallocated: truckStats.nightUnallocated }
+    : { allocated: truckStats.dayAllocated, unallocated: truckStats.dayUnallocated };
+  const tvShiftNote = board.magnets.find((magnet) => magnet.id === "shift-note")?.primary.trim();
 
   const updateBoard = useCallback((next: MagneticBoardState) => {
     stateRef.current = next;
@@ -2494,7 +2491,7 @@ export default function Home() {
   }
 
   return (
-    <main className={presentation ? `app presentation${tvShiftView === "both" ? "" : " presentation-single"}` : "app"}>
+    <main className={presentation ? `app presentation presentation-${tvShiftView}${tvShiftView === "both" ? "" : " presentation-single"}` : "app"}>
       {!presentation && (
         <header className="control-bar">
           <div className="control-brand">
@@ -2776,35 +2773,41 @@ export default function Home() {
         />
       )}
 
-      <div className="board-scroll">
-        {presentation && tvShiftView !== "both" && (
-          <div
-            className="tv-full-header"
-            style={{ width: BOARD_WIDTH * tvHeaderScale, height: TV_SHARED_HEADER_HEIGHT * tvHeaderScale }}
-          >
-            <div
-              className="magnet-canvas canvas-locked"
-              style={{
-                width: BOARD_WIDTH,
-                height: BOARD_HEIGHT,
-                transform: `scale(${tvHeaderScale})`,
-              }}
-            >
-              <BoardBackground truckStats={truckStats} parkUpCounts={parkUpCounts} board={board} />
-              {board.magnets.filter((item) => item.y < TV_SHARED_HEADER_HEIGHT).map((item) => (
-                <button
-                  key={`tv-header-${item.id}`}
-                  type="button"
-                  className={`magnet magnet-${item.kind} tone-${item.tone}`}
-                  style={{ left: item.x, top: item.y, width: item.width, height: item.height, zIndex: item.z + 10 }}
-                  tabIndex={-1}
-                >
-                  <MagnetContent magnet={item} />
-                </button>
-              ))}
+      {presentation && tvShiftView !== "both" && (
+        <header className={`tv-shift-header tv-shift-header-${tvShiftView}`}>
+          <div className="tv-shift-brand">
+            <span aria-hidden="true">M</span>
+            <div>
+              <small>WOODIE WOODIE OPERATIONS</small>
+              <strong>LOAD &amp; HAUL</strong>
             </div>
           </div>
-        )}
+          <div className="tv-shift-title">
+            <span>LIVE SHIFTBOARD</span>
+            <h1>{tvShiftView === "day" ? "DAY SHIFT" : "NIGHT SHIFT"}</h1>
+          </div>
+          <div className="tv-shift-context">
+            <span>BOARD DATE</span>
+            <strong>{board.boardDate}</strong>
+            <small>{board.roster}</small>
+          </div>
+          <div className="tv-shift-metrics" aria-label={`${tvShiftView} shift truck totals`}>
+            <div><span>ALLOCATED</span><strong>{tvShiftStats.allocated}</strong></div>
+            <div><span>UNALLOCATED</span><strong>{tvShiftStats.unallocated}</strong></div>
+            <div><span>PARKED</span><strong>{totalParked}</strong></div>
+          </div>
+          <div className="tv-shift-live">
+            <span><i aria-hidden="true" /> LIVE</span>
+            <small>{formatUpdatedAt(board.updatedAt)}</small>
+          </div>
+          <div className="tv-shift-note">
+            <strong>SHIFT NOTE</strong>
+            <span>{tvShiftNote || "No shift note entered"}</span>
+          </div>
+        </header>
+      )}
+
+      <div className="board-scroll">
         <div
           className="board-stage"
           style={{
@@ -2812,10 +2815,9 @@ export default function Home() {
               ? (tvShiftView === "both" ? BOARD_WIDTH : SHIFT_WIDTH) * tvScale
               : BOARD_WIDTH,
             height: presentation
-              ? (tvShiftView === "both" ? BOARD_HEIGHT * tvScaleY : (PARK_UP_TOP - TV_SHARED_HEADER_HEIGHT) * tvScaleY)
+              ? (tvShiftView === "both" ? BOARD_HEIGHT : TV_SINGLE_CONTENT_HEIGHT) * tvScale
               : BOARD_HEIGHT,
             overflow: presentation && tvShiftView !== "both" ? "hidden" : undefined,
-            marginTop: presentation && tvShiftView !== "both" ? TV_SHARED_HEADER_HEIGHT * tvHeaderScale : undefined,
           }}
         >
           <div
@@ -2825,9 +2827,8 @@ export default function Home() {
               width: BOARD_WIDTH,
               height: BOARD_HEIGHT,
               transform: presentation
-                ? `scale(${tvScale}, ${tvScaleY}) translate(${tvShiftView === "night" ? -SHIFT_WIDTH : 0}px, ${tvShiftView === "both" ? 0 : -TV_SHARED_HEADER_HEIGHT}px)`
+                ? `scale(${tvScale}) translate(${tvShiftView === "night" ? -SHIFT_WIDTH : 0}px, ${tvShiftView === "both" ? 0 : -TV_SINGLE_CONTENT_TOP}px)`
                 : undefined,
-              "--tv-counter-scale": presentation && tvShiftView !== "both" ? tvScaleY / tvScale : 1,
             } as CSSProperties}
             onDragOver={(event) => event.preventDefault()}
             onDrop={dropFromRack}
@@ -2913,10 +2914,6 @@ export default function Home() {
                   width: item.width,
                   height: item.height,
                   zIndex: item.z + 10,
-                  transform: presentation && tvShiftView !== "both"
-                    ? `scaleX(${tvScaleY / tvScale})`
-                    : undefined,
-                  transformOrigin: "left center",
                 }}
                 aria-label={magnetAccessibleText(item)}
                 title={magnetTitle(item)}
@@ -2998,20 +2995,22 @@ export default function Home() {
 
       {presentation && (
         <div className="tv-controls" aria-label="TV view controls">
+          <div className="tv-control-label"><span>DISPLAY</span><strong>TV VIEW</strong></div>
           <div className="tv-shift-selector" role="group" aria-label="Displayed shift">
             {(["both", "day", "night"] as TvShiftView[]).map((view) => (
               <button
                 key={view}
                 className={tvShiftView === view ? "active" : ""}
                 type="button"
+                aria-pressed={tvShiftView === view}
                 onClick={() => setTvShiftView(view)}
               >
-                {view === "both" ? "BOTH" : view === "day" ? "DAYS" : "NIGHTS"}
+                {view === "both" ? "FULL BOARD" : view === "day" ? "DAY SHIFT" : "NIGHT SHIFT"}
               </button>
             ))}
           </div>
           <button className="exit-tv" type="button" onClick={() => setPresentation(false)}>
-            EXIT TV VIEW
+            EXIT
           </button>
         </div>
       )}
