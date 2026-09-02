@@ -1,7 +1,7 @@
 export const BOARD_WIDTH = 1880;
 export const BOARD_HEIGHT = 940;
 export const SHIFT_WIDTH = BOARD_WIDTH / 2;
-export const LEGACY_SHIFT_WIDTH = 866;
+const LEGACY_SHIFT_WIDTH = 866;
 export const LEGACY_ACTIVE_WIDTH = LEGACY_SHIFT_WIDTH * 2;
 
 export function expandShiftBoardX(x: number) {
@@ -13,8 +13,14 @@ export function expandShiftBoardX(x: number) {
 }
 
 export const WORK_ROWS_TOP = 170;
-export const WORK_ROW_HEIGHT = 126;
+const WORK_ROW_HEIGHT = 126;
 export const PARK_UP_TOP = 800;
+export const ALLOCATION_LANE_LEFT = 272;
+export const ALLOCATION_LANE_RIGHT = 520;
+
+const PREVIOUS_ALLOCATION_LANE_LEFT = 252;
+const PREVIOUS_ALLOCATION_LANE_RIGHT = 500;
+const ALLOCATION_LANE_SHIFT = ALLOCATION_LANE_LEFT - PREVIOUS_ALLOCATION_LANE_LEFT;
 
 export const LEGACY_WORK_ROWS_TOP = 218;
 export const LEGACY_WORK_ROW_HEIGHT = 146;
@@ -64,6 +70,14 @@ export type MagnetTone =
   | "white" | "dark" | "amber" | "red" | "teal"
   | "blue" | "violet" | "green" | "orange" | "slate";
 
+export type EquipmentStatus =
+  | "available"
+  | "breakdown"
+  | "fuel"
+  | "workshop"
+  | "standby"
+  | "awaiting-operator";
+
 export type Magnet = {
   id: string;
   kind: MagnetKind;
@@ -79,10 +93,101 @@ export type Magnet = {
   crew?: CrewCode;
   competencies?: string[];
   fullName?: string;
+  equipmentStatus?: EquipmentStatus;
+  parkedFromShift?: "day" | "night";
+  note?: string;
 };
 
 export type CrewCode = "A" | "B" | "C";
 export type WorkSectionCount = 1 | 2 | 3 | 4 | 5;
+
+export const attachableMagnetKinds = new Set<MagnetKind>([
+  "truck", "dozer", "grader", "watercart", "excavator",
+  "loader", "lightvehicle", "support",
+]);
+
+export const magnetShiftSide = (magnet: Pick<Magnet, "x">): "day" | "night" =>
+  magnet.x < SHIFT_WIDTH ? "day" : "night";
+
+const localMagnetX = (magnet: Pick<Magnet, "x">) =>
+  magnet.x < SHIFT_WIDTH ? magnet.x : magnet.x - SHIFT_WIDTH;
+
+export const isPitWorkAreaControl = (magnet: Magnet) =>
+  magnet.kind === "location" &&
+  magnet.y >= WORK_ROWS_TOP && magnet.y < PARK_UP_TOP &&
+  localMagnetX(magnet) >= 0 && localMagnetX(magnet) < 130;
+
+export const isDiggerControl = (magnet: Magnet) =>
+  magnet.kind === "excavator" &&
+  magnet.y >= WORK_ROWS_TOP && magnet.y < PARK_UP_TOP &&
+  localMagnetX(magnet) >= 130 && localMagnetX(magnet) < ALLOCATION_LANE_LEFT;
+
+export function getWorkControlRows(
+  magnets: Magnet[],
+  sectionCount: number,
+  predicate: (magnet: Magnet) => boolean,
+) {
+  const rows = new Map<string, number>();
+  (["day", "night"] as const).forEach((side) => {
+    magnets
+      .filter((magnet) => predicate(magnet) && magnetShiftSide(magnet) === side)
+      .sort((left, right) => left.y - right.y || left.id.localeCompare(right.id))
+      .slice(0, sectionCount)
+      .forEach((magnet, rowIndex) => rows.set(magnet.id, rowIndex));
+  });
+  return rows;
+}
+
+export function pruneHiddenWorkSectionControls(
+  magnets: Magnet[],
+  sectionCount: WorkSectionCount,
+) {
+  const removedIds = new Set<string>();
+  (["day", "night"] as const).forEach((side) => {
+    [isPitWorkAreaControl, isDiggerControl].forEach((predicate) => {
+      magnets
+        .filter((magnet) => magnetShiftSide(magnet) === side && predicate(magnet))
+        .sort((left, right) => left.y - right.y || left.id.localeCompare(right.id))
+        .slice(sectionCount)
+        .forEach((magnet) => removedIds.add(magnet.id));
+    });
+  });
+  if (!removedIds.size) return { magnets, changed: false };
+  return {
+    magnets: magnets
+      .filter((magnet) => !removedIds.has(magnet.id))
+      .map((magnet) =>
+        magnet.attachedTo && removedIds.has(magnet.attachedTo)
+          ? { ...magnet, attachedTo: undefined }
+          : magnet,
+      ),
+    changed: true,
+  };
+}
+
+export function moveAllocatedTruckGroupsIntoWiderLane(magnets: Magnet[]) {
+  const allocatedTruckIds = new Set(
+    magnets
+      .filter((magnet) => {
+        if (magnet.kind !== "truck" || magnet.y < WORK_ROWS_TOP || magnet.y >= PARK_UP_TOP) return false;
+        const sideLeft = magnet.x < SHIFT_WIDTH ? 0 : SHIFT_WIDTH;
+        const centreX = magnet.x + magnet.width / 2 - sideLeft;
+        return centreX >= PREVIOUS_ALLOCATION_LANE_LEFT && centreX < PREVIOUS_ALLOCATION_LANE_RIGHT;
+      })
+      .map((magnet) => magnet.id),
+  );
+
+  return magnets.map((magnet) => {
+    if (!allocatedTruckIds.has(magnet.id) && (!magnet.attachedTo || !allocatedTruckIds.has(magnet.attachedTo))) {
+      return magnet;
+    }
+    const sideLeft = magnet.x < SHIFT_WIDTH ? 0 : SHIFT_WIDTH;
+    return {
+      ...magnet,
+      x: Math.min(magnet.x + ALLOCATION_LANE_SHIFT, sideLeft + SHIFT_WIDTH - magnet.width),
+    };
+  });
+}
 
 const FOUR_SECTION_HEIGHT = (PARK_UP_TOP - WORK_ROWS_TOP) / 4;
 
@@ -105,8 +210,9 @@ export function resizeWorkSections(
 ) {
   const oldHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / fromCount;
   const newHeight = (PARK_UP_TOP - WORK_ROWS_TOP) / toCount;
+  const visibleMagnets = pruneHiddenWorkSectionControls(magnets, toCount).magnets;
 
-  return magnets.map((magnet) => {
+  return visibleMagnets.map((magnet) => {
     if (magnet.crew || magnet.y < WORK_ROWS_TOP || magnet.y >= PARK_UP_TOP) return magnet;
     const oldRow = Math.min(fromCount - 1, Math.floor((magnet.y - WORK_ROWS_TOP) / oldHeight));
     const rowOffset = (magnet.y - (WORK_ROWS_TOP + oldRow * oldHeight)) / oldHeight;
@@ -120,12 +226,53 @@ export function resizeWorkSections(
 
 export type MagnetTemplate = Pick<Magnet, "kind" | "primary" | "tone" | "width" | "height" | "crew" | "competencies" | "fullName">;
 
+export const magnetInventoryKey = (
+  template: Pick<MagnetTemplate, "kind" | "primary" | "crew" | "fullName">,
+) => [template.kind, template.crew ?? "", template.fullName ?? template.primary]
+  .map((part) => part.trim().toUpperCase())
+  .join(":");
+
+export type BoardArchiveState = {
+  magnets: Magnet[];
+  boardDate: string;
+  roster: string;
+  workSectionCount?: WorkSectionCount;
+};
+
+export type BoardSnapshot = {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+  state: BoardArchiveState;
+};
+
+export type BoardHistoryEntry = {
+  id: string;
+  action: string;
+  createdAt: string;
+  createdBy: string;
+  state: BoardArchiveState;
+};
+
+export type BoardAuditEntry = {
+  id: string;
+  action: string;
+  createdAt: string;
+  createdBy: string;
+};
+
 export type MagneticBoardState = {
   layoutVersion: number;
   magnets: Magnet[];
   personnelNames?: Record<string, string>;
   pitWorkAreas?: string[];
   diggerOptions?: string[];
+  customInventory?: MagnetTemplate[];
+  removedInventory?: string[];
+  snapshots?: BoardSnapshot[];
+  historyVersions?: BoardHistoryEntry[];
+  auditLog?: BoardAuditEntry[];
   startingMagnets?: Magnet[];
   lastMovedId?: string;
   boardDate: string;
@@ -182,8 +329,7 @@ export function compactCurrentMagnetWidths(magnets: Magnet[]) {
 
 export function compactMagnetHeight(kind: MagnetKind, height: number) {
   if (responsiveWidthKinds.has(kind)) return 20;
-  const legacyCeiling = kind === "person" ? 29 : kind === "location" || kind === "note" ? 28 : 24;
-  return height <= legacyCeiling ? Math.min(height, kindDefaults[kind].height) : height;
+  return height <= 28 ? Math.min(height, kindDefaults[kind].height) : height;
 }
 
 const item = (
@@ -238,14 +384,37 @@ const floorTruckPairs = (
   return [truck, person];
 });
 
+const mineHeaderMagnets: Magnet[] = [
+  { id: "day-header-mine-2", kind: "location", primary: "MINE 2", x: 280, y: 119, width: 100, height: 20, z: 1, tone: "white" },
+  { id: "day-header-mine-3", kind: "location", primary: "MINE 3", x: 500, y: 119, width: 100, height: 20, z: 1, tone: "white" },
+  { id: "night-header-mine-2", kind: "location", primary: "MINE 2", x: SHIFT_WIDTH + 280, y: 119, width: 100, height: 20, z: 1, tone: "white" },
+  { id: "night-header-mine-3", kind: "location", primary: "MINE 3", x: SHIFT_WIDTH + 500, y: 119, width: 100, height: 20, z: 1, tone: "white" },
+];
+
+export function restoreMineHeaderMagnets(magnets: Magnet[]) {
+  const hasHeaderMagnet = (candidate: Magnet) => magnets.some((magnet) =>
+    magnet.kind === "location" &&
+    magnet.primary.trim().toUpperCase() === candidate.primary &&
+    magnet.y >= 100 && magnet.y < WORK_ROWS_TOP &&
+    (magnet.x < SHIFT_WIDTH) === (candidate.x < SHIFT_WIDTH),
+  );
+
+  return [
+    ...magnets,
+    ...mineHeaderMagnets
+      .filter((candidate) => !hasHeaderMagnet(candidate))
+      .map((candidate) => ({ ...candidate })),
+  ];
+}
+
 export const defaultMagneticBoard: MagneticBoardState = {
-  layoutVersion: 14,
+  layoutVersion: 16,
   boardDate: "20 JUL 2026",
   roster: "CREW B · NIGHT 4 OF 7",
   updatedAt: "2026-07-20T09:30:00+08:00",
   updatedBy: "MINE CONTROL",
   workSectionCount: 4,
-  magnets: spreadFourSectionMagnets([
+  magnets: restoreMineHeaderMagnets(spreadFourSectionMagnets([
     item("shift-note", "note", "Confirm fuel and park-up locations with Mine Control before end of shift.", 92, 95, 520, 23),
     item("day-supervisor", "person", "PAUL T", 18, 149, 100, 27, "white", "SUPERVISOR"),
     item("day-leaders", "person", "MATT · JOHN C", 722, 149, 132, 27, "white", "TEAM LEADERS"),
@@ -323,7 +492,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
     ...equipment("n-hotseat-water", "watercart", ["WC018"], 1400, 772),
     ...people("n-hotseat-water-p", ["YD"], 1472, 772),
 
-  ]),
+  ])),
 };
 
 const templates = (kind: MagnetKind, labels: string[]): MagnetTemplate[] =>
@@ -349,7 +518,7 @@ const crewPeople = (crew: CrewCode, names: string[]): MagnetTemplate[] => names.
 
 // Imported from the three personnel matrices supplied for 20/07/2026. Competencies
 // remain editable on each magnet because training status changes independently of crew.
-export const crewRosters: Record<CrewCode, MagnetTemplate[]> = {
+const crewRosters: Record<CrewCode, MagnetTemplate[]> = {
   A: crewPeople("A", [
     "SONYA ABDULLAH", "COLIN ANSELL", "LEONARD ARTCH", "ANDREW BELL", "DAVID BENSON",
     "ANDREW BRIGHT", "MALCOLM BRUIN", "NEVILLE CAHILL", "IZAAC CAPORN", "JEAN CARLOS RIBEIRO",
@@ -396,7 +565,7 @@ export const magnetInventory: MagnetTemplate[] = [
   ...crewRosters.A,
   ...crewRosters.B,
   ...crewRosters.C,
-  ...templates("location", ["CHRIS D PIT", "RADIO HILL", "CORGAN", "PALO", "BIG MACK", "RHODES ROM", "DIRECT CART", "RADIO HILL HOT SEAT", "CHRIS/D HOTSEAT", "CHRIS D HOTSEAT BAY", "CORGAN HOT SEAT BAY", "BIG MACK HOTSEAT BAY", "CRIB-HUT GO-LINE", "WORKSHOP DEAD LINE", "GRAVEYARD", "ORE CARTAGE", "CAMP", "MILL", "TRAINING", "U/S", "D&A","TRAMMING",  "ON LEAVE / SICK"]),
+  ...templates("location", ["CHRIS D PIT", "RADIO HILL", "CORGAN", "PALO", "BIG MACK", "RHODES ROM", "DIRECT CART", "RADIO HILL HOT SEAT", "CHRIS/D HOTSEAT", "CHRIS D HOTSEAT BAY", "CORGAN HOT SEAT BAY", "BIG MACK HOTSEAT BAY", "CRIB-HUT GO-LINE", "WORKSHOP DEAD LINE", "GRAVEYARD", "ORE CARTAGE", "CAMP", "MILL", "TRAINING", "U/S", "D&A", "TRAMMING", "ON LEAVE / SICK"]),
 ];
 
 export const magnetKindLabels: Record<MagnetKind, string> = {
@@ -404,7 +573,3 @@ export const magnetKindLabels: Record<MagnetKind, string> = {
   excavator: "Excavator", loader: "Loader", lightvehicle: "Light vehicle",
   support: "Support vehicle", location: "Location / status", person: "Person", note: "Note",
 };
-
-export const magnetToneOptions: MagnetTone[] = [
-  "white", "dark", "amber", "red", "teal", "blue", "violet", "green", "orange", "slate",
-];

@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 from pathlib import Path
 from io import BytesIO
 from zipfile import ZipFile
@@ -23,10 +24,16 @@ from reportlab.lib.utils import ImageReader
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "output" / "pdf"
+parser = ArgumentParser(description="Generate the shiftboard ICT review PDF pack from an approved company Word template.")
+parser.add_argument("reference_docx", type=Path, help="Path to the approved company Word template")
+parser.add_argument("--output-dir", type=Path, default=ROOT / "output" / "pdf", help="Output directory")
+args = parser.parse_args()
+REFERENCE_DOCX = args.reference_docx.expanduser().resolve()
+OUTPUT = args.output_dir.expanduser().resolve()
+if not REFERENCE_DOCX.is_file():
+    parser.error(f"Reference template not found: {REFERENCE_DOCX}")
 ASSETS = ROOT / "docs" / "manual-assets"
 LOGO = ROOT / "public" / "ConsminLogo.png"
-REFERENCE_DOCX = Path(r"C:\Users\mark.pepere\Downloads\Lightning and Storm Events Procedure_V2.docx")
 OUTPUT.mkdir(parents=True, exist_ok=True)
 
 RED = colors.HexColor("#C8102E")
@@ -202,7 +209,7 @@ def build_network_diagram():
         box((x1, y1, x2, y2), heading, detail)
 
     box((565, 430, 1235, 590), "Company internal network", "Approved devices and restricted access paths", fill="#F2F2F2", outline="#777777")
-    box((565, 690, 1235, 910), "Approved host", "Node.js application | TCP port or HTTPS proxy\nWorker API | Local D1-compatible database", fill="#F7E8EA")
+    box((565, 690, 1235, 910), "Approved onsite PC", "Next.js application | TCP port or HTTPS proxy\nValidated API | Local SQLite database", fill="#F7E8EA")
 
     for cx in (230, 670, 1110, 1550):
         draw.line((cx, 320, 900, 430), fill="#555555", width=5)
@@ -235,11 +242,10 @@ def build_technical_overview(network_path):
             ["Component", "Purpose"],
             ["React", "Interactive board and drag-and-drop user interface"],
             ["TypeScript", "Frontend, backend API, and shared data types"],
-            ["Vite and Vinext", "Application development and production build tooling"],
-            ["Worker API", "Validated board load and save requests"],
-            ["Wrangler and Miniflare", "Local Worker-compatible runtime and database environment"],
-            ["D1-compatible SQLite", "Board state, magnet positions, links, notes, and shift details"],
-            ["Node.js 22 LTS", "Host runtime"],
+            ["Next.js", "Application development and production server build"],
+            ["App Router API", "Validated board load and save requests"],
+            ["SQLite", "Board state, magnet positions, links, notes, and shift details"],
+            ["Node.js 24", "Onsite host runtime"],
             ["GitHub", "Private source control and version history"],
         ], [43 * mm, 129 * mm]),
         PageBreak(),

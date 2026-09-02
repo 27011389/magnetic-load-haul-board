@@ -38,9 +38,10 @@ yarn-error.log*
 next-env.d.ts
 *.tsbuildinfo
 /dist/
-/.wrangler/
+/data/
 /outputs/
 /work/
+/tmp/
 
 # local handover packages and Microsoft Office working files
 *.zip

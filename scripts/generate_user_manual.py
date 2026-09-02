@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 from pathlib import Path
 
 from docx import Document
@@ -10,8 +11,19 @@ from docx.shared import Inches, Pt, RGBColor
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCE_DOCX = Path(r"C:\Users\mark.pepere\Downloads\Lightning and Storm Events Procedure_V2.docx")
-OUT = ROOT / "docs" / "Magnetic_Shiftboard_User_Manual_Company_Standard.docx"
+parser = ArgumentParser(description="Generate the shiftboard user manual from an approved company Word template.")
+parser.add_argument("reference_docx", type=Path, help="Path to the approved company Word template")
+parser.add_argument(
+    "--output",
+    type=Path,
+    default=ROOT / "docs" / "Magnetic_Shiftboard_User_Manual_Company_Standard.docx",
+    help="Output .docx path",
+)
+args = parser.parse_args()
+REFERENCE_DOCX = args.reference_docx.expanduser().resolve()
+OUT = args.output.expanduser().resolve()
+if not REFERENCE_DOCX.is_file():
+    parser.error(f"Reference template not found: {REFERENCE_DOCX}")
 LOGO = ROOT / "public" / "ConsminLogo.png"
 MANUAL_ASSETS = ROOT / "docs" / "manual-assets"
 
@@ -603,7 +615,7 @@ doc.add_heading("14. Terms and definitions", level=1)
 terms = [
     ("CMA", "ConsMin Australia"),
     ("Control", "The authorised operational point responsible for editing and publishing the live board"),
-    ("D1", "The SQLite-compatible database used to store the shared board state"),
+    ("SQLite", "The local database file on the onsite host used to store the shared board state"),
     ("Live Board", "The status displayed when the application has loaded and no save is pending"),
     ("Magnet", "A movable board item representing a person, asset, location, status, or note"),
     ("TV View", "A fitted display mode intended for read-only operational viewing"),
