@@ -12,10 +12,10 @@ from that host in a web browser.
 5. Run `Start-Shiftboard.cmd`.
 6. Keep the server window open while the board is in use.
 
-Open `http://localhost:3000` on the host. Other computers use
-`http://HOST-IP-ADDRESS:3000`.
+Open `http://localhost:5173` on the host. Other onsite computers use
+`http://10.0.1.38:5173/`.
 
-If other computers cannot connect, allow inbound TCP port 3000 through Windows
+If other computers cannot connect, allow inbound TCP port 5173 through Windows
 Firewall for the approved local network only. Do not expose the board to the
 public internet.
 

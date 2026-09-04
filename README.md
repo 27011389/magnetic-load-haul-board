@@ -37,7 +37,7 @@ To install:
 5. Run `Start-Shiftboard.cmd`.
 6. Keep the server window open while the board is in use.
 7. Open the address shown in the server window. On the host this is normally
-   `http://localhost:3000`.
+   `http://localhost:5173`.
 
 After installation, only `Start-Shiftboard.cmd` is needed to start the board.
 Run the installer again after an application upgrade.
@@ -55,12 +55,12 @@ All users must connect to the same host. Do not install a separate copy on each
 computer.
 
 1. Give the host a reserved IP address or internal DNS name.
-2. If required, configure Windows Firewall to allow TCP port 3000 from the
+2. If required, configure Windows Firewall to allow TCP port 5173 from the
    approved local network.
-3. Open `http://HOST-IP-ADDRESS:3000` on each approved computer.
+3. Open `http://10.0.1.38:5173/` on each approved computer.
 
 Keep the host powered on, connected to the network and prevented from sleeping.
-Do not expose port 3000 to the public internet.
+Do not expose port 5173 to the public internet.
 
 ## Data and backups
 
@@ -92,7 +92,7 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. Development uses
+Open `http://localhost:5173`. Development uses
 `data/shiftboard-development.sqlite`, separate from the production database.
 
 Before releasing a change, run:
@@ -130,7 +130,7 @@ overwriting newer changes.
   can access the npm package registry.
 - If the start script reports that the application is not installed, run
   `Install-Shiftboard.cmd` first.
-- If port 3000 is already in use, the board may already be running.
+- If port 5173 is already in use, the board may already be running.
 - If another computer cannot connect, check the host address, network and
   firewall rule.
 - If the board shows **RETRYING**, check the server window and confirm the host
