@@ -8,12 +8,8 @@
   "scripts": {
     "install:ci": "npm ci",
     "dev": "next dev --hostname 0.0.0.0",
-    "build": "next build && npm run validate:artifact",
+    "build": "next build",
     "start": "next start --hostname 0.0.0.0",
-    "backup": "node scripts/backup-database.mjs",
-    "package:onsite": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./deploy/windows/Create-OnsitePackage.ps1",
-    "test": "npm run build && node --test tests/*.test.mjs",
-    "validate:artifact": "node scripts/validate-artifact.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

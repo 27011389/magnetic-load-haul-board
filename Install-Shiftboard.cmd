@@ -1,13 +1,23 @@
 @echo off
 setlocal
-title Install Magnetic Load and Haul Shiftboard
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\windows\Install-Shiftboard.ps1"
-set "SHIFTBOARD_EXIT_CODE=%ERRORLEVEL%"
+cd /d "%~dp0"
+
+echo Installing packages...
+call npm ci
+if errorlevel 1 goto :failed
+
 echo.
-if not "%SHIFTBOARD_EXIT_CODE%"=="0" (
-  echo Installation failed. Review the message above.
-) else (
-  echo Installation completed successfully.
-)
+echo Building the shiftboard...
+call npm run build
+if errorlevel 1 goto :failed
+
+echo.
+echo Installation complete. Run Start-Shiftboard.cmd to start the board.
 pause
-exit /b %SHIFTBOARD_EXIT_CODE%
+exit /b 0
+
+:failed
+echo.
+echo Installation failed. Check the message above.
+pause
+exit /b 1
