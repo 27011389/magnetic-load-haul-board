@@ -416,14 +416,14 @@ export const defaultMagneticBoard: MagneticBoardState = {
   workSectionCount: 4,
   magnets: restoreMineHeaderMagnets(spreadFourSectionMagnets([
     item("shift-note", "note", "Confirm fuel and park-up locations with Mine Control before end of shift.", 92, 95, 520, 23),
-    item("day-supervisor", "person", "PAUL T", 18, 149, 100, 27, "white", "SUPERVISOR"),
-    item("day-leaders", "person", "MATT · JOHN C", 722, 149, 132, 27, "white", "TEAM LEADERS"),
+    item("day-supervisor", "person", "PAUL", 18, 149, 100, 27, "white", "SUPERVISOR"),
+    item("day-leaders", "person", "MATT · JOHN", 722, 149, 132, 27, "white", "TEAM LEADERS"),
     item("night-supervisor", "person", "BEVAN", 884, 149, 100, 27, "white", "SUPERVISOR"),
     item("night-leaders", "person", "RON · BRETT · NEV", 1566, 149, 156, 27, "white", "TEAM LEADERS"),
 
     item("d-radio", "location", "RADIO HILL", 10, 224, 118, 28, "amber", "RL 219 · SHOT 5405"),
     ...equipment("d-radio-assets", "excavator", ["EX30"], 142, 224),
-    ...people("d-radio-assets-p", ["RICKY M"], 210, 224),
+    ...people("d-radio-assets-p", ["RICKY"], 210, 224),
     ...equipment("d-radio-dozers", "dozer", ["DZ017"], 142, 254),
     ...people("d-radio-dozers-p", ["WILLIAM"], 210, 254),
     ...floorTruckPairs("d-radio-trucks", "d-radio-people", ["DT215", "DT217", "DT218", "DT221"], ["JENNA", "KIERAN", "HOLLY", "JOSH"], 218),
@@ -468,7 +468,7 @@ export const defaultMagneticBoard: MagneticBoardState = {
     ...people("n-radio-assets-p", ["ADO"], 1076, 224),
     ...equipment("n-radio-dozers", "dozer", ["DZ017"], 1008, 254),
     ...people("n-radio-dozers-p", ["KAIDEN"], 1076, 254),
-    ...floorTruckPairs("n-radio-trucks", "n-radio-people", ["DT217", "DT218", "DT221", "DT222"], ["SEPH", "DAVID S", "REHAN", "REN"], 218).map((magnet) => ({ ...magnet, x: magnet.x + SHIFT_WIDTH })),
+    ...floorTruckPairs("n-radio-trucks", "n-radio-people", ["DT217", "DT218", "DT221", "DT222"], ["SEPH", "DAVID", "REHAN", "REN"], 218).map((magnet) => ({ ...magnet, x: magnet.x + SHIFT_WIDTH })),
 
     item("n-corgan", "location", "CORGAN", 878, 370, 118, 28, "teal", "RL 273 · SHOT 8901"),
     ...equipment("n-corgan-assets", "excavator", ["EX29"], 1008, 370),
@@ -516,40 +516,31 @@ const crewPeople = (crew: CrewCode, names: string[]): MagnetTemplate[] => names.
   };
 });
 
-// Imported from the three personnel matrices supplied for 20/07/2026. Competencies
-// remain editable on each magnet because training status changes independently of crew.
+// Repeated first names use numbered labels so each saved magnet remains unique.
 const crewRosters: Record<CrewCode, MagnetTemplate[]> = {
   A: crewPeople("A", [
-    "SONYA ABDULLAH", "COLIN ANSELL", "LEONARD ARTCH", "ANDREW BELL", "DAVID BENSON",
-    "ANDREW BRIGHT", "MALCOLM BRUIN", "NEVILLE CAHILL", "IZAAC CAPORN", "JEAN CARLOS RIBEIRO",
-    "SAMMIE CATE", "BRENDON COOPER", "TEAU DANIEL", "YINGWEI DIALLOGO", "KAIDEN HOFMEYER",
-    "RONALD HOOPER", "JEREMY HSU", "ADRIAN INESON", "REUBEN KEEPA", "THOMAS KELLY",
-    "ANTHONY LLOYD", "NICHOLAS LLOYD", "MUNASHE MACHOKOTO", "JOSEPH MAHILUM", "LUKUDU MANASE",
-    "KINGI MARTIN", "REHAN MCMURDO", "MAJELLA METUAMATE", "AARON MILLER", "ANNETTE MURCOTT",
-    "CAMERON PRICE", "BOSTON RAESIDE", "SCOTT ROBERTSON", "SAMSON SEBAR", "DAVID SIVOUR",
-    "JAKSON TIMMER", "SCOTT TSAOUSIS", "BALLIF WATENE", "AARON WATT", "RENATA WERAHIKO",
-    "BENJAMIN WILKINSON", "TROY WOODROFFE", "BRETT WYNNE", "EUGENE YEBOAH",
+    "SONYA", "COLIN", "LEONARD", "ANDREW 1", "DAVID 1", "ANDREW 2", "MALCOLM",
+    "NEVILLE", "IZAAC", "JEAN", "SAMMIE", "BRENDON", "TEAU", "YINGWEI", "KAIDEN",
+    "RONALD", "JEREMY", "ADRIAN", "REUBEN", "THOMAS", "ANTHONY", "NICHOLAS",
+    "MUNASHE", "JOSEPH", "LUKUDU", "KINGI", "REHAN", "MAJELLA", "AARON 1",
+    "ANNETTE", "CAMERON", "BOSTON", "SCOTT 1", "SAMSON", "DAVID 2", "JAKSON",
+    "SCOTT 2", "BALLIF", "AARON 2", "RENATA", "BENJAMIN", "TROY", "BRETT", "EUGENE",
   ]),
   B: crewPeople("B", [
-    "JOSHUA ANDREWS", "ABEL ATSBEHA", "HOLLY BLANCH", "SHANE CARR", "JOHN CLARE",
-    "MAREE DEACON", "SUZETTE DU PLESSIS", "WAYNE GANE", "JOSEPH GOODWIN", "PAUL HAMLIN",
-    "CHAD HENDRIKS", "JASON HERRING", "TYRONE HERRING", "CHRISTOPHER HOPKINSON", "BRADLEY JESSUP",
-    "WILLIAM JOHNSON", "HUNA KEEPA", "RYAN LARSEN", "EMILY LUCKMAN", "RICKY MAC CUSPIE",
-    "EVE MATTHEWS", "TRAVIS MCCOSKER", "MATTHEW MCGAULEY", "DAVID MCPHEE", "MICHAELA MILLER",
-    "BLAYN MILNE", "KARENE NIGHTINGALE", "MAREE PEDRO", "DYLAN RANN", "WIRIMU HOHEPA ROBERTS",
-    "KIERAN RUSSELL", "PAUL SCHAEFER-MCCLUSKEY", "HELEN SHAW", "SUN SIMONS", "MAXWELL SMITH",
-    "REUBEN STEADMAN", "GREGORY SUITOR", "KEVIN WAKEFIELD", "JENNA WALLBANK", "NICHOLAS WARDELL",
-    "DAVID WEBSTER", "PETER WILKINSON", "SUSANNAH WOODS",
+    "JOSHUA", "ABEL", "HOLLY", "SHANE", "JOHN", "MAREE 1", "SUZETTE", "WAYNE",
+    "JOSEPH", "PAUL 1", "CHAD", "JASON", "TYRONE", "CHRISTOPHER", "BRADLEY",
+    "WILLIAM", "HUNA", "RYAN", "EMILY", "RICKY", "EVE", "TRAVIS", "MATTHEW",
+    "DAVID 1", "MICHAELA", "BLAYN", "KARENE", "MAREE 2", "DYLAN", "WIRIMU",
+    "KIERAN", "PAUL 2", "HELEN", "SUN", "MAXWELL", "REUBEN", "GREGORY", "KEVIN",
+    "JENNA", "NICHOLAS", "DAVID 2", "PETER", "SUSANNAH",
   ]),
   C: crewPeople("C", [
-    "ETHAN ABRAHAM", "WAYNE BELL", "RAFAEL BEMBENUTO", "FRANCIS COOK", "MICHAEL CORCORAN",
-    "JOSHUA CROSSWELL", "COREY DE MALMANCHE", "JULIA DIAZ", "TRAC GAPPER", "MITCHELL GILLESPIE",
-    "STUART GREENOCK", "ANTHONY HANNAFORD", "SAMUEL HYNDMAN", "CASEY JELLIS", "JURNEE JERRY-WALKER",
-    "AYDEN KELLY", "TATIANA LEEF", "CHIA-YU LIN", "ETHAN MACMILLAN", "JOHN MCKENNA",
-    "DYLAN MELVILLE", "SHANE MOSELEY", "LAONA MULLINGS", "PHILLIP NELSON", "JOHN PORTER",
-    "JADE POWELL", "GLEN RADOVAN", "ARAPERE RATIMA", "BENJAMIN REEDY", "ZAC REEKIE",
-    "CONNOR RIDGWAY", "TIMOTHY SANSON", "AARON STURGESS", "MICHAEL STURGESS", "KASMALI SUMAILI",
-    "MATHEW TAYLOR", "SHANE TEAGUE", "JOHN THORNTON", "ROWAN TOCKNELL", "ALESSIA WEIR",
+    "ETHAN 1", "WAYNE", "RAFAEL", "FRANCIS", "MICHAEL 1", "JOSHUA", "COREY",
+    "JULIA", "TRAC", "MITCHELL", "STUART", "ANTHONY", "SAMUEL", "CASEY", "JURNEE",
+    "AYDEN", "TATIANA", "CHIA-YU", "ETHAN 2", "JOHN 1", "DYLAN", "SHANE 1",
+    "LAONA", "PHILLIP", "JOHN 2", "JADE", "GLEN", "ARAPERE", "BENJAMIN", "ZAC",
+    "CONNOR", "TIMOTHY", "AARON", "MICHAEL 2", "KASMALI", "MATHEW", "SHANE 2",
+    "JOHN 3", "ROWAN", "ALESSIA",
   ]),
 };
 
