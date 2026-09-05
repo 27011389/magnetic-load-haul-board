@@ -8,6 +8,7 @@ operators, park-up areas and workshop activity.
 
 - Drag-and-drop equipment, operator, location and note magnets
 - Day, night and full-board TV views
+- TV remote navigation: left for Day Shift and right for Night Shift
 - Shared live board across onsite computers
 - Collision checking and operator-to-equipment links
 - Board lock, search, undo and reset controls

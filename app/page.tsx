@@ -2052,6 +2052,12 @@ export default function Home() {
 
       if (target?.matches("input, textarea, select")) return;
 
+      if (presentation && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        setTvShiftView(event.key === "ArrowLeft" ? "day" : "night");
+        return;
+      }
+
       if (!selectedId || locked || editorOpenRef.current) return;
       const movement: Record<string, [number, number]> = {
         ArrowLeft: [-1, 0],
