@@ -2782,7 +2782,7 @@ export default function Home() {
       {presentation && tvShiftView !== "both" && (
         <header className={`tv-shift-header tv-shift-header-${tvShiftView}`}>
           <div className="tv-shift-brand">
-            <span aria-hidden="true">M</span>
+            <span className="tv-shift-logo" aria-hidden="true" />
             <div>
               <small>WOODIE WOODIE OPERATIONS</small>
               <strong>LOAD &amp; HAUL</strong>

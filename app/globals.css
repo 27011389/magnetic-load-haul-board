@@ -929,18 +929,12 @@ button.status-chip { cursor: pointer; }
   gap: 12px;
 }
 
-.tv-shift-brand > span {
+.tv-shift-logo {
   width: 46px;
   height: 46px;
   flex: 0 0 46px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: var(--tv-accent);
-  color: var(--tv-accent-ink);
-  box-shadow: 0 0 30px color-mix(in srgb, var(--tv-accent) 25%, transparent);
-  font-size: 20px;
-  font-weight: 1000;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  background: url("/ConsminCube.png") center / 108% 108% no-repeat;
 }
 
 .tv-shift-brand div,
